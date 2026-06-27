@@ -23,6 +23,46 @@ from typing import TYPE_CHECKING
 from ..statistics.analyzer import ORDERED_COLUMNS, StatisticsAnalyzer
 from ..statistics.metrics import build_aggregate_summary
 
+# 中英文双语列标题映射
+COLUMN_DISPLAY_NAMES: dict[str, str] = {
+    "vt_symbol":             "股票代码/vt_symbol",
+    "strategy_name":         "策略名称/strategy_name",
+    "status":                "状态/status",
+    "start_date":            "开始日期/start_date",
+    "end_date":              "结束日期/end_date",
+    "total_days":            "总交易天数/total_days",
+    "profit_days":           "盈利天数/profit_days",
+    "loss_days":             "亏损天数/loss_days",
+    "capital":               "初始资金/capital",
+    "end_balance":           "结束资金/end_balance",
+    "total_return":          "总收益率%/total_return",
+    "annual_return":         "年化收益率%/annual_return",
+    "daily_return":          "日均收益率%/daily_return",
+    "return_std":            "收益率标准差%/return_std",
+    "max_drawdown":          "最大回撤额/max_drawdown",
+    "max_ddpercent":         "最大回撤%/max_ddpercent",
+    "max_drawdown_duration": "最大回撤持续天数/max_drawdown_duration",
+    "sharpe_ratio":          "夏普比率/sharpe_ratio",
+    "ewm_sharpe":            "EWM夏普比率/ewm_sharpe",
+    "return_drawdown_ratio": "收益回撤比/return_drawdown_ratio",
+    "rgr_ratio":             "RGR比率/rgr_ratio",
+    "calmar_ratio":          "卡玛比率/calmar_ratio",
+    "profit_factor":         "盈利因子/profit_factor",
+    "total_trade_count":     "总交易次数/total_trade_count",
+    "daily_trade_count":     "日均交易次数/daily_trade_count",
+    "total_net_pnl":         "总净盈亏/total_net_pnl",
+    "daily_net_pnl":         "日均净盈亏/daily_net_pnl",
+    "total_commission":      "总手续费/total_commission",
+    "daily_commission":      "日均手续费/daily_commission",
+    "total_slippage":        "总滑点/total_slippage",
+    "daily_slippage":        "日均滑点/daily_slippage",
+    "total_turnover":        "总成交额/total_turnover",
+    "daily_turnover":        "日均成交额/daily_turnover",
+    "task_id":               "任务ID/task_id",
+    "elapsed_seconds":       "耗时(秒)/elapsed_seconds",
+    "error_msg":             "错误信息/error_msg",
+}
+
 if TYPE_CHECKING:
     from ..task import BacktestResult
 
@@ -99,28 +139,34 @@ class CSVWriter:
             )
         )
 
+        # Map each internal key to its bilingual display name for the header row
+        display_keys: list[str] = [
+            COLUMN_DISPLAY_NAMES.get(k, k) for k in all_keys
+        ]
+        # Reverse map: display_name -> internal_key (for summary row lookup)
+        display_to_key: dict[str, str] = dict(zip(display_keys, all_keys))
+
         with open(filepath, "w", newline="", encoding=encoding) as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=all_keys,
-                delimiter=delimiter,
-                extrasaction="ignore",
-            )
-            writer.writeheader()
-            writer.writerows(rows)
+            writer = csv.writer(f, delimiter=delimiter)
+
+            # Write bilingual header
+            writer.writerow(display_keys)
+
+            # Write data rows (values ordered by all_keys)
+            for row in rows:
+                writer.writerow([row.get(k, "") for k in all_keys])
 
             if include_summary_row:
                 summary = build_aggregate_summary(results)
-                # Write aggregate summary as a final row with blank symbol column
-                summary_row: dict = {k: "" for k in all_keys}
-                summary_row["vt_symbol"] = "__SUMMARY__"
+                summary_row: list = [""] * len(all_keys)
+                key_index = {k: i for i, k in enumerate(all_keys)}
+                summary_row[0] = "SUMMARY"
                 for k, v in summary.items():
-                    if k in all_keys:
-                        summary_row[k] = v
-                    # Also write to matching column if key exists without prefix
+                    if k in key_index:
+                        summary_row[key_index[k]] = v
                     plain_key = k.replace("agg_", "")
-                    if plain_key in all_keys and k not in all_keys:
-                        summary_row[plain_key] = v
+                    if plain_key in key_index and k not in key_index:
+                        summary_row[key_index[plain_key]] = v
                 writer.writerow(summary_row)
 
         file_size = filepath.stat().st_size
