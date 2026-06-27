@@ -95,6 +95,7 @@ class MainEngine:
         self.engines: dict[str, BaseEngine] = {}
         self.apps: dict[str, BaseApp] = {}
         self.exchanges: list[Exchange] = []
+        print("★★★★★ 我修改的源码正在运行 ★★★★★")
 
         os.chdir(TRADER_DIR)    # Change working directory
         self.init_engines()     # Initialize function engines
