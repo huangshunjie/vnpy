@@ -27,6 +27,74 @@ def _field_with_hint(widget: QtWidgets.QWidget, hint_text: str) -> QtWidgets.QWi
     return c
 
 
+class _ParamTable(QtWidgets.QTableWidget):
+    """策略参数编辑表格：左列参数名+类型（只读），右列参数值（可直接编辑）。"""
+
+    def __init__(self) -> None:
+        super().__init__(0, 2)
+        self.setHorizontalHeaderLabels(["参数名（类型）", "值"])
+        self.horizontalHeader().setSectionResizeMode(
+            0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.horizontalHeader().setSectionResizeMode(
+            1, QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        self.verticalHeader().setVisible(False)
+        self.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.NoSelection
+        )
+        self.setEditTriggers(
+            QtWidgets.QAbstractItemView.EditTrigger.DoubleClicked
+            | QtWidgets.QAbstractItemView.EditTrigger.SelectedClicked
+            | QtWidgets.QAbstractItemView.EditTrigger.AnyKeyPressed
+        )
+
+    def load_params(self, strategy_cls: type, existing: dict | None = None) -> None:
+        keys = getattr(strategy_cls, "parameters", [])
+        self.setRowCount(len(keys))
+        for row, key in enumerate(keys):
+            default = getattr(strategy_cls, key, "")
+            val_type = type(default).__name__ if default != "" else "str"
+
+            name_item = QtWidgets.QTableWidgetItem(f"{key}  ({val_type})")
+            name_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
+            from vnpy.trader.ui import QtGui
+            name_item.setForeground(QtGui.QColor('#888888'))
+            self.setItem(row, 0, name_item)
+
+            value = existing.get(key, default) if existing else default
+            self.setItem(row, 1, QtWidgets.QTableWidgetItem(str(value)))
+
+        self.resizeRowsToContents()
+
+    def get_setting(self) -> dict:
+        out: dict = {}
+        for row in range(self.rowCount()):
+            name_cell = self.item(row, 0)
+            val_cell  = self.item(row, 1)
+            if not name_cell or not val_cell:
+                continue
+            key   = name_cell.text().split("  ")[0].strip()
+            v_str = val_cell.text().strip()
+            try:
+                out[key] = int(v_str)
+            except ValueError:
+                try:
+                    out[key] = float(v_str)
+                except ValueError:
+                    out[key] = v_str
+        return out
+
+    def set_from_dict(self, setting: dict) -> None:
+        for row in range(self.rowCount()):
+            name_cell = self.item(row, 0)
+            if not name_cell:
+                continue
+            key = name_cell.text().split("  ")[0].strip()
+            if key in setting:
+                self.item(row, 1).setText(str(setting[key]))
+
+
 class SettingDialog(QtWidgets.QDialog):
     """批量回测配置对话框，支持配置持久化记忆。"""
 
@@ -52,6 +120,7 @@ class SettingDialog(QtWidgets.QDialog):
         self._strategy_combo = QtWidgets.QComboBox()
         self._strategy_combo.setMinimumWidth(260)
         self._populate_strategy_combo()
+        self._strategy_combo.currentTextChanged.connect(self._on_strategy_changed)
         form.addRow("策略类：", self._strategy_combo)
 
         self._start_edit = QtWidgets.QDateEdit(QtCore.QDate(2020, 1, 1))
@@ -88,11 +157,11 @@ class SettingDialog(QtWidgets.QDialog):
         form.addRow("最小变动价位：", _field_with_hint(
             self._pricetick_edit, "A 股填 0.01；沪深 ETF 填 0.001"))
 
-        self._setting_edit = QtWidgets.QPlainTextEdit()
-        self._setting_edit.setFixedHeight(90)
+        self._param_table = _ParamTable()
+        self._param_table.setFixedHeight(160)
         form.addRow("策略参数：", _field_with_hint(
-            self._setting_edit,
-            "格式：key=value，每行一个。示例：atr_length=22"))
+            self._param_table,
+            "双击右列单元格直接修改参数值；切换策略时自动填入默认值"))
 
         self._pool_edit = QtWidgets.QPlainTextEdit()
         self._pool_edit.setFixedHeight(100)
@@ -158,12 +227,19 @@ class SettingDialog(QtWidgets.QDialog):
         else:
             self._strategy_combo.addItem("（未找到策略类）")
 
+    def _on_strategy_changed(self, name: str) -> None:
+        """切换策略时用该策略的默认参数填充表格。"""
+        cls = self._strategy_map.get(name)
+        if not cls:
+            self._param_table.setRowCount(0)
+            return
+        self._param_table.load_params(cls)
+
     # ------------------------------------------------------------------ #
     #  Config persistence
     # ------------------------------------------------------------------ #
 
     def _load_config(self) -> None:
-        """从磁盘恢复上次配置，文件不存在则静默跳过。"""
         if not _CONFIG_PATH.exists():
             return
         try:
@@ -198,8 +274,7 @@ class SettingDialog(QtWidgets.QDialog):
                 widget.setText(str(v))
 
         if setting := data.get("strategy_setting", {}):
-            self._setting_edit.setPlainText(
-                "\n".join(f"{k}={v}" for k, v in setting.items()))
+            self._param_table.set_from_dict(setting)
 
         if symbols := data.get("symbols", []):
             self._pool_edit.setPlainText("\n".join(symbols))
@@ -207,7 +282,6 @@ class SettingDialog(QtWidgets.QDialog):
         if data.get("use_multiprocess"):
             self._mp_check.setChecked(True)
         self._workers_spin.setValue(int(data.get("max_workers", 4)))
-
 
     def _save_config(self) -> None:
         import json as _json
@@ -222,7 +296,7 @@ class SettingDialog(QtWidgets.QDialog):
             "slippage":         self._slippage_edit.text().strip(),
             "size":             self._size_edit.text().strip(),
             "pricetick":        self._pricetick_edit.text().strip(),
-            "strategy_setting": self._parse_setting(),
+            "strategy_setting": self._param_table.get_setting(),
             "symbols":          self._parse_symbols(),
             "use_multiprocess": self._mp_check.isChecked(),
             "max_workers":      self._workers_spin.value(),
@@ -239,22 +313,6 @@ class SettingDialog(QtWidgets.QDialog):
     #  Helpers
     # ------------------------------------------------------------------ #
 
-    def _parse_setting(self) -> dict:
-        out: dict = {}
-        for line in self._setting_edit.toPlainText().splitlines():
-            line = line.strip()
-            if "=" in line:
-                k, _, v_str = line.partition("=")
-                k, v_str = k.strip(), v_str.strip()
-                try:
-                    out[k] = int(v_str)
-                except ValueError:
-                    try:
-                        out[k] = float(v_str)
-                    except ValueError:
-                        out[k] = v_str
-        return out
-
     def _parse_symbols(self) -> list:
         raw = self._pool_edit.toPlainText()
         return [s.strip()
@@ -268,8 +326,7 @@ class SettingDialog(QtWidgets.QDialog):
     def _on_accept(self) -> None:
         errors = self._validate()
         if errors:
-            QtWidgets.QMessageBox.warning(
-                self, "参数错误", "\n".join(errors))
+            QtWidgets.QMessageBox.warning(self, "参数错误", "\n".join(errors))
             return
         self._save_config()
         self.accept()
@@ -313,7 +370,7 @@ class SettingDialog(QtWidgets.QDialog):
                 "slippage":         float(self._slippage_edit.text()),
                 "size":             float(self._size_edit.text()),
                 "pricetick":        float(self._pricetick_edit.text()),
-                "strategy_setting": self._parse_setting(),
+                "strategy_setting": self._param_table.get_setting(),
             },
             "symbols":          self._parse_symbols(),
             "use_multiprocess": self._mp_check.isChecked(),
@@ -342,8 +399,7 @@ class SettingDialog(QtWidgets.QDialog):
             if v := params.get(attr):
                 widget.setText(str(v))
         if setting := params.get("strategy_setting", {}):
-            self._setting_edit.setPlainText(
-                "\n".join(f"{k}={v}" for k, v in setting.items()))
+            self._param_table.set_from_dict(setting)
         if symbols := cfg.get("symbols", []):
             self._pool_edit.setPlainText("\n".join(symbols))
         if cfg.get("use_multiprocess"):
