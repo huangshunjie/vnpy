@@ -196,6 +196,29 @@ class FactorEngine:
         """Shorthand: Spearman rank IC."""
         return self.cross_section_ic(factor_df, return_col, method="spearman")
 
+    def ic_ir(
+        self,
+        ic_series: "pd.Series",
+    ) -> float:
+        """
+        ICIR = mean(IC) / std(IC).
+
+        Measures the stability of a factor's predictive power over time.
+        Requires a time-series of IC values (one per period / cross-section).
+
+        :param ic_series: pd.Series of IC values indexed by date/period.
+        :return:          ICIR float; nan if fewer than 2 valid values.
+        """
+        import pandas as pd  # noqa: PLC0415
+        valid = ic_series.dropna()
+        if len(valid) < 2:
+            return float("nan")
+        std = float(valid.std())
+        if std == 0:
+            return float("nan")
+        return round(float(valid.mean()) / std, 4)
+
+
     # ------------------------------------------------------------------ #
     #  Layer (quantile) analysis
     # ------------------------------------------------------------------ #
@@ -371,3 +394,233 @@ class FactorEngine:
                 print(f"  Correlation failed: {e}\n")
 
         print("=" * 65)
+
+
+# ------------------------------------------------------------------ #
+#  CompositeScorer
+# ------------------------------------------------------------------ #
+
+class CompositeScorer:
+    """
+    把多个因子值加权求和，得出每只股票的综合评分。
+
+    权重字典 key = factor_name，value = 权重（未归一化）。
+    权重在计算前会归一化为 sum=1.0。
+
+    用法::
+
+        scorer = CompositeScorer({'sharpe_ratio': 0.4, 'calmar_ratio': 0.6})
+        scores = scorer.score(factor_df)  # pd.Series, index=vt_symbol
+    """
+
+    def __init__(self, weights: dict[str, float] | None = None) -> None:
+        self._weights: dict[str, float] = weights or {}
+
+    def score(
+        self,
+        factor_df: 'pd.DataFrame',
+    ) -> 'pd.Series':
+        """
+        加权求和（各因子先做 rank 归一化到 [0,1]，再加权求和）。
+
+        rank 归一化：避免不同量纲因子值之间的数值差异。
+        """
+        import pandas as pd
+
+        weights = self._weights
+        cols = [c for c in weights if c in factor_df.columns]
+        if not cols:
+            return pd.Series(dtype=float, name='composite_score')
+
+        total_w = sum(abs(weights[c]) for c in cols)
+        if total_w == 0:
+            return pd.Series(dtype=float, name='composite_score')
+
+        ranked = factor_df[cols].rank(pct=True, ascending=True)
+        scored = sum(
+            ranked[c] * (weights[c] / total_w)
+            for c in cols
+        )
+        scored.name = 'composite_score'
+        return scored
+
+
+# ------------------------------------------------------------------ #
+#  ICCalculator
+# ------------------------------------------------------------------ #
+
+class ICCalculator:
+    """
+    IC / RankIC 计算器。
+
+    IC（信息系数）衡量因子预测能力：因子值与未来收益的相关性。
+    当前实现：用回测结果区间内的 total_return 作为近似未来收益。
+    后续：接入真实的 forward_returns 数据替换实现。
+    """
+
+    @staticmethod
+    def calc_ic(
+        factor_values: dict[str, float],
+        forward_returns: dict[str, float],
+        method: str = 'pearson',
+    ) -> float:
+        """Pearson IC = corr(factor_values, forward_returns)"""
+        import pandas as pd
+        s1 = pd.Series(factor_values)
+        s2 = pd.Series(forward_returns)
+        aligned = pd.concat([s1, s2], axis=1).dropna()
+        if len(aligned) < 3:
+            return float('nan')
+        return float(aligned.iloc[:, 0].corr(aligned.iloc[:, 1], method=method))
+
+    @staticmethod
+    def calc_rank_ic(
+        factor_values: dict[str, float],
+        forward_returns: dict[str, float],
+    ) -> float:
+        """RankIC = Spearman corr(rank(factor), rank(forward_returns))"""
+        return ICCalculator.calc_ic(factor_values, forward_returns, method='spearman')
+
+
+# ------------------------------------------------------------------ #
+#  IndustryNeutralizer
+# ------------------------------------------------------------------ #
+
+class IndustryNeutralizer:
+    """
+    行业中性化处理器。
+
+    对每只股票的因子值，减去同行业均值，得到行业内相对值。
+    需要 BatchBacktestResult.industry 字段非空。
+    industry 为空的股票：直接使用原始值，不参与中性化。
+    """
+
+    @staticmethod
+    def neutralize(
+        results: list,
+        factor_values: dict[str, float],
+    ) -> dict[str, float]:
+        """
+        行业中性化。
+
+        :param results:       BatchBacktestResult 列表（需要 .vt_symbol / .industry）
+        :param factor_values: {vt_symbol: factor_value}
+        :return:              行业中性化后的 {vt_symbol: neutralized_value}
+        """
+        from collections import defaultdict
+
+        industry_map: dict[str, str] = {
+            r.vt_symbol: getattr(r, 'industry', '')
+            for r in results
+        }
+
+        industry_vals: dict[str, list[float]] = defaultdict(list)
+        for sym, val in factor_values.items():
+            ind = industry_map.get(sym, '')
+            if ind:
+                industry_vals[ind].append(val)
+
+        industry_mean: dict[str, float] = {
+            ind: sum(vals) / len(vals)
+            for ind, vals in industry_vals.items()
+            if vals
+        }
+
+        neutralized: dict[str, float] = {}
+        for sym, val in factor_values.items():
+            ind = industry_map.get(sym, '')
+            mean = industry_mean.get(ind)
+            neutralized[sym] = val - mean if mean is not None else val
+        return neutralized
+
+
+# ------------------------------------------------------------------ #
+#  FactorEngine.run()  —  写回 BatchBacktestResult 扩展字段
+# ------------------------------------------------------------------ #
+
+def _bbr_factor_df(
+    self: FactorEngine,
+    results: list,
+) -> 'pd.DataFrame':
+    """
+    从 BatchBacktestResult 列表直接读强类型字段构建因子 DataFrame。
+
+    BatchBacktestResult 没有 .statistics，status 已是 str，
+    不能走旧的 calculate() 路径，直接读字段。
+    """
+    import pandas as pd
+    import math
+
+    factor_data: dict[str, dict[str, float]] = {
+        name: {} for name in self.factor_names
+    }
+
+    for r in results:
+        sym = r.vt_symbol
+        if getattr(r, 'status', '') not in ('success', 'SUCCESS'):
+            continue
+        for name in self.factor_names:
+            try:
+                raw = getattr(r, name, None)
+                if raw is None:
+                    continue
+                val = float(raw)
+                if not math.isnan(val) and not math.isinf(val):
+                    factor_data[name][sym] = val
+            except (TypeError, ValueError, AttributeError):
+                pass
+
+    return pd.DataFrame(factor_data)
+
+
+def _factor_engine_run(
+    self: FactorEngine,
+    results: list,
+    weights: dict[str, float] | None = None,
+    bars_map: dict | None = None,
+    selector_top_n: int | None = None,
+) -> list:
+    """
+    对 BatchBacktestResult 列表执行完整因子分析，
+    把结果写回每个对象的扩展字段：
+      factor_scores   : {factor_name: value}
+      composite_score : 加权综合评分
+      factor_rank     : 按 composite_score 从高到低排名（1=最好）
+      selected        : factor_rank <= selector_top_n 时为 True
+    """
+    if not results or not self._factors:
+        return results
+
+    import pandas as pd
+
+    factor_df = _bbr_factor_df(self, results)
+
+    if weights is None:
+        weights = {name: 1.0 for name in self.factor_names}
+
+    scorer = CompositeScorer(weights)
+    scores = scorer.score(factor_df)
+
+    ranked = scores.rank(ascending=False, method='min').astype(int)
+
+    for r in results:
+        sym = r.vt_symbol
+        r.factor_scores = {
+            name: float(factor_df.at[sym, name])
+            for name in self.factor_names
+            if sym in factor_df.index
+            and name in factor_df.columns
+            and pd.notna(factor_df.at[sym, name])
+        }
+        r.composite_score = float(scores[sym]) if sym in scores else None
+        r.factor_rank     = int(ranked[sym])   if sym in ranked else None
+        r.selected        = (
+            r.factor_rank is not None
+            and selector_top_n is not None
+            and r.factor_rank <= selector_top_n
+        )
+
+    return results
+
+
+FactorEngine.run = _factor_engine_run

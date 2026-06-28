@@ -189,6 +189,14 @@ class SettingDialog(QtWidgets.QDialog):
         mp_vbox.addWidget(_hint("≤ 50 只时串行更快；≥ 200 只时多进程明显提速"))
         form.addRow("并行：", mp_container)
 
+        self._tushare_token_edit = QtWidgets.QLineEdit()
+        self._tushare_token_edit.setPlaceholderText("填入后自动获取股票名称和行业")
+        self._tushare_token_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        form.addRow("Tushare Token：", _field_with_hint(
+            self._tushare_token_edit,
+            "可选。填入后回测结果自动显示股票名称和行业。"
+            "免费 Token：https://tushare.pro/register"))
+
         btn_box = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.StandardButton.Ok
             | QtWidgets.QDialogButtonBox.StandardButton.Cancel
@@ -283,6 +291,17 @@ class SettingDialog(QtWidgets.QDialog):
             self._mp_check.setChecked(True)
         self._workers_spin.setValue(int(data.get("max_workers", 4)))
 
+        # Tushare token: 从 vt_setting.json 读取
+        import json as _j2
+        from pathlib import Path as _P2
+        vt_cfg = _P2.home() / ".vnpy" / "vt_setting.json"
+        if vt_cfg.exists():
+            try:
+                vt_data = _j2.loads(vt_cfg.read_text(encoding="utf-8"))
+                self._tushare_token_edit.setText(vt_data.get("tushare_token", ""))
+            except Exception:
+                pass
+
     def _save_config(self) -> None:
         import json as _json
         qs = self._start_edit.date()
@@ -301,6 +320,26 @@ class SettingDialog(QtWidgets.QDialog):
             "use_multiprocess": self._mp_check.isChecked(),
             "max_workers":      self._workers_spin.value(),
         }
+        # 同步写入 vt_setting.json，供 TushareNameProvider.from_settings() 读取
+        token = self._tushare_token_edit.text().strip()
+        from pathlib import Path as _P3
+        vt_cfg = _P3.home() / ".vnpy" / "vt_setting.json"
+        try:
+            import json as _j3
+            vt_data: dict = {}
+            if vt_cfg.exists():
+                vt_data = _j3.loads(vt_cfg.read_text(encoding="utf-8"))
+            if token:
+                vt_data["tushare_token"] = token
+            elif "tushare_token" in vt_data:
+                del vt_data["tushare_token"]
+            vt_cfg.parent.mkdir(parents=True, exist_ok=True)
+            vt_cfg.write_text(
+                _j3.dumps(vt_data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
         try:
             _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
             _CONFIG_PATH.write_text(

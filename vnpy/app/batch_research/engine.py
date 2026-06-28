@@ -31,6 +31,8 @@ from .base import (
     ProgressData,
 )
 from .batch_engine import BatchBacktestingEngine
+from .batch_result import BatchBacktestResult
+from .statistics.enricher import ResultEnricher, TushareNameProvider
 from .task import BacktestResult, TaskStatus
 
 if TYPE_CHECKING:
@@ -57,7 +59,14 @@ class BatchResearchEngine(BaseEngine):
 
         self._thread: threading.Thread | None = None
         self._stop_flag: bool = False
-        self._results: list[BacktestResult] = []
+        self._results: list[BatchBacktestResult] = []
+        # 自动加载 TushareNameProvider（如果配置了 token）
+        _name_provider = TushareNameProvider.from_settings()
+        self._enricher: ResultEnricher = ResultEnricher(
+            name_provider=_name_provider
+        )
+        if _name_provider is not None:
+            self.write_log("已加载 TushareNameProvider，股票名称和行业将自动填充")
 
     # ------------------------------------------------------------------ #
     #  Public configuration API (called from Widget)
@@ -101,6 +110,12 @@ class BatchResearchEngine(BaseEngine):
         self._stop_flag = False
         self._results.clear()
 
+        # 每次回测前重新读 token，保证配置对话框填完后立即生效
+        _provider = TushareNameProvider.from_settings()
+        self._enricher = ResultEnricher(name_provider=_provider)
+        if _provider is not None:
+            self.write_log("已加载 TushareNameProvider，将自动填充股票名称和行业")
+
         self._thread = threading.Thread(
             target=self._run_in_thread,
             args=(use_multiprocess, max_workers),
@@ -125,7 +140,7 @@ class BatchResearchEngine(BaseEngine):
     #  Result access (thread-safe snapshots)
     # ------------------------------------------------------------------ #
 
-    def get_results(self) -> list[BacktestResult]:
+    def get_results(self) -> list[BatchBacktestResult]:
         return list(self._results)
 
     def get_summary(self) -> "RunSummary | None":
@@ -135,25 +150,48 @@ class BatchResearchEngine(BaseEngine):
     #  Export delegates
     # ------------------------------------------------------------------ #
 
-    def export_to_csv(self, filepath: str, **kwargs) -> None:
+    def export_to_csv(
+        self,
+        filepath: str,
+        column_manager=None,
+        scope=None,
+    ) -> None:
         if not self._results:
-            self.write_log("无结果可导出")
+            self.write_log("\u65e0\u7ed3\u679c\u53ef\u5bfc\u51fa")
             return
-        try:
-            self.batch_engine.export_to_csv(filepath)
-            self.write_log(f"CSV 已导出：{filepath}")
-        except Exception as e:
-            self.write_log(f"CSV 导出失败：{e}")
+        from .output.csv_exporter import CSVExporter
+        from .output.exporter import ExportScope as _Scope
+        from .column_manager import ColumnManager as _CM
+        from pathlib import Path
+        cm = column_manager or _CM()
+        sc = scope or _Scope.ALL
+        result = CSVExporter().export(
+            self._results, Path(filepath), column_manager=cm, scope=sc
+        )
+        self.write_log(str(result))
 
-    def export_to_excel(self, filepath: str, **kwargs) -> None:
+    def export_to_excel(
+        self,
+        filepath: str,
+        column_manager=None,
+        scope=None,
+        top_n: int = 20,
+    ) -> None:
         if not self._results:
-            self.write_log("无结果可导出")
+            self.write_log("\u65e0\u7ed3\u679c\u53ef\u5bfc\u51fa")
             return
-        try:
-            self.batch_engine.export_to_excel(filepath)
-            self.write_log(f"Excel 已导出：{filepath}")
-        except Exception as e:
-            self.write_log(f"Excel 导出失败：{e}")
+        from .output.excel_exporter import ExcelExporter
+        from .output.exporter import ExportScope as _Scope
+        from .column_manager import ColumnManager as _CM
+        from pathlib import Path
+        cm = column_manager or _CM()
+        sc = scope or _Scope.ALL
+        result = ExcelExporter().export(
+            self._results, Path(filepath),
+            column_manager=cm, scope=sc, top_n=top_n
+        )
+        self.write_log(str(result))
+
 
     # ------------------------------------------------------------------ #
     #  BaseEngine overrides
@@ -194,7 +232,8 @@ class BatchResearchEngine(BaseEngine):
         def on_task_done(result: BacktestResult) -> None:
             nonlocal completed, success, skipped, failed
 
-            self._results.append(result)
+            bbr = self._enricher.enrich(result)
+            self._results.append(bbr)
             completed += 1
 
             if result.status == TaskStatus.SUCCESS:
@@ -204,8 +243,8 @@ class BatchResearchEngine(BaseEngine):
             else:
                 failed += 1
 
-            # Single-result event
-            self.event_engine.put(Event(EVENT_BATCH_RESULT, result))
+            # Single-result event (BatchBacktestResult)
+            self.event_engine.put(Event(EVENT_BATCH_RESULT, bbr))
 
             # Progress event
             elapsed = (datetime.now() - run_start).total_seconds()

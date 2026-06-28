@@ -22,10 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .metrics import (
-    build_aggregate_summary,
-    enrich_statistics,
-)
+from .metrics import build_aggregate_summary
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -102,9 +99,9 @@ class StatisticsAnalyzer:
         :param results: List of BacktestResult objects.
         :return:        Same list (mutated in-place) for chaining.
         """
-        for r in results:
-            if r.statistics:
-                enrich_statistics(r.statistics)
+        # BatchBacktestResult already has L1 fields computed by ResultEnricher;
+        # BacktestResult (legacy) path: enrich_statistics was already called.
+        # This method is now a no-op but kept for API compatibility.
         return results
 
     # ------------------------------------------------------------------ #
@@ -147,12 +144,17 @@ class StatisticsAnalyzer:
         :param ascending: Sort direction (default descending = best first).
         :return:          Sorted sub-list of up to N results.
         """
-        valid = [r for r in results if r.statistics]
-        sorted_results = sorted(
-            valid,
-            key=lambda r: float(r.statistics.get(by, 0)),
-            reverse=not ascending,
-        )
+        def _sort_key(r):
+            val = (getattr(r, by, None)
+                   or (r.statistics.get(by, 0) if hasattr(r, 'statistics') else 0))
+            try:
+                return float(val or 0)
+            except (TypeError, ValueError):
+                return 0.0
+        valid = [r for r in results
+                 if getattr(r, 'total_return', None) is not None
+                 or (hasattr(r, 'statistics') and r.statistics)]
+        sorted_results = sorted(valid, key=_sort_key, reverse=not ascending)
         return sorted_results[:n]
 
     def filter_by_min_trades(
@@ -164,7 +166,11 @@ class StatisticsAnalyzer:
         Discard results with fewer than min_trades total trades.
         Useful for filtering out strategies that barely traded.
         """
-        return [r for r in results if r.total_trade_count >= min_trades]
+        def _trades(r):
+            return int(getattr(r, 'total_trade_count', 0)
+                       or (r.statistics.get('total_trade_count', 0)
+                           if hasattr(r, 'statistics') else 0))
+        return [r for r in results if _trades(r) >= min_trades]
 
     def filter_by_min_sharpe(
         self,
@@ -172,7 +178,12 @@ class StatisticsAnalyzer:
         min_sharpe: float = 0.0,
     ) -> list["BacktestResult"]:
         """Return results with sharpe_ratio >= min_sharpe."""
-        return [r for r in results if r.sharpe_ratio >= min_sharpe]
+        def _sharpe(r):
+            val = getattr(r, 'sharpe_ratio', None)
+            if val is None and hasattr(r, 'statistics'):
+                val = r.statistics.get('sharpe_ratio', 0.0)
+            return float(val or 0.0)
+        return [r for r in results if _sharpe(r) >= min_sharpe]
 
     def filter_by_max_drawdown(
         self,
@@ -183,7 +194,12 @@ class StatisticsAnalyzer:
         Return results where max_ddpercent >= max_ddpercent threshold.
         E.g. max_ddpercent=-20.0 keeps symbols with drawdown no worse than -20%.
         """
-        return [r for r in results if r.max_ddpercent >= max_ddpercent]
+        def _mdd(r):
+            val = getattr(r, 'max_ddpercent', None)
+            if val is None and hasattr(r, 'statistics'):
+                val = r.statistics.get('max_ddpercent', 0.0)
+            return float(val or 0.0)
+        return [r for r in results if _mdd(r) >= max_ddpercent]
 
     # ------------------------------------------------------------------ #
     #  DataFrame output
@@ -210,10 +226,14 @@ class StatisticsAnalyzer:
         if not results:
             return pd.DataFrame(columns=ORDERED_COLUMNS)
 
-        if enrich:
-            self.enrich(results)
-
-        rows = [r.to_flat_dict() for r in results]
+        rows = []
+        for r in results:
+            if hasattr(r, 'to_flat_dict'):
+                rows.append(r.to_flat_dict())
+            elif hasattr(r, 'statistics'):
+                row = dict(r.statistics)
+                row['vt_symbol'] = r.vt_symbol
+                rows.append(row)
         df = pd.DataFrame(rows)
 
         # Reorder columns: ORDERED_COLUMNS first, then any extras
@@ -251,7 +271,6 @@ class StatisticsAnalyzer:
         print(f"  Avg Sharpe      : {agg['agg_avg_sharpe']:.2f}")
         print(f"  Avg max DD      : {agg['agg_avg_max_ddpercent']:.2f}%")
         print(f"  Avg Calmar      : {agg['agg_avg_calmar']:.2f}")
-        print(f"  P/L ratio       : {agg['agg_profit_loss_ratio']:.2f}")
         print(f"  Total trades    : {agg['agg_total_trades']}")
         print(f"  Avg trades/sym  : {agg['agg_avg_trades']:.1f}")
         print()

@@ -4,12 +4,17 @@ ui/factor_dialog.py
 因子分析对话框 — 在完成批量回测后，对结果做多因子截面分析。
 
 功能：
-  - 勾选要使用的因子（内置 ResultFactor + BarFactor）
+  - 勾选要使用的因子（内置 ResultFactor）
   - 选择对标收益列（total_return / annual_return / sharpe_ratio）
+  - 设置综合评分权重（等权 / 自定义）
+  - 设置选股数量（Top N）
   - 点击"运行分析"后显示：
       Tab 1: 因子 IC / RankIC 表
       Tab 2: 分层收益表（最佳 IC 因子）
       Tab 3: 因子相关矩阵
+      Tab 4: 综合排名（composite_score + factor_rank + selected）
+
+接收 list[BatchBacktestResult]，不依赖旧 BacktestResult。
 """
 
 from __future__ import annotations
@@ -19,24 +24,21 @@ from typing import TYPE_CHECKING
 from vnpy.trader.ui import QtCore, QtWidgets
 
 if TYPE_CHECKING:
-    from ..task import BacktestResult
+    from ..batch_result import BatchBacktestResult
 
 
 _BUILTIN_RESULT_FACTORS = [
-    ("sharpe_ratio",            "夏普比率",      True),
-    ("total_return",            "总收益%",       True),
-    ("annual_return",           "年化收益%",     True),
-    ("max_ddpercent",           "最大回撤%",     True),
-    ("calmar_ratio",            "卡玛比率",      True),
-    ("return_drawdown_ratio",   "收益/回撤比",   False),
-    ("ewm_sharpe",              "EWM夏普",       False),
-    ("daily_trade_count",       "日均交易次数",  False),
-]
-
-_BUILTIN_BAR_FACTORS = [
-    ("price_momentum_60b",  "价格动量(60根)",  False),
-    ("volatility_60b",      "实现波动率(60根)", False),
-    ("rsi_14",              "RSI(14)",          False),
+    ("sharpe_ratio",          "夏普比率",     True),
+    ("total_return",          "总收益%",      True),
+    ("annual_return",         "年化收益%",    True),
+    ("max_ddpercent",         "最大回撤%",    True),
+    ("calmar_ratio",          "卡玛比率",     True),
+    ("annual_volatility",     "年化波动率%",  False),
+    ("win_rate",              "日胜率%",      False),
+    ("profit_factor",         "盈利因子",     False),
+    ("return_drawdown_ratio", "收益/回撤比",  False),
+    ("ewm_sharpe",            "EWM夏普",      False),
+    ("daily_trade_count",     "日均交易次数", False),
 ]
 
 _RETURN_COLS = ["total_return", "annual_return", "sharpe_ratio"]
@@ -44,71 +46,54 @@ _RETURN_COLS = ["total_return", "annual_return", "sharpe_ratio"]
 
 class FactorAnalysisDialog(QtWidgets.QDialog):
     """
-    Factor analysis dialog.
+    因子分析对话框，接收 list[BatchBacktestResult]。
 
-    Receives a list[BacktestResult] and an optional bars_map;
-    runs FactorEngine and displays results in three tabs.
+    综合排名路径：FactorEngine.run() 直读 BatchBacktestResult 字段。
+    IC/分层/相关矩阵路径：用 pandas 直接计算，不走旧 calculate()。
     """
 
     def __init__(
         self,
-        results: "list[BacktestResult]",
+        results: "list[BatchBacktestResult]",
         bars_map: dict | None = None,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("多因子截面分析")
-        self.setMinimumSize(900, 640)
-        self.resize(960, 700)
+        self.setMinimumSize(960, 680)
+        self.resize(1040, 740)
 
-        self._results = results
+        self._results  = results
         self._bars_map = bars_map or {}
-        self._factor_df = None
 
         self._init_ui()
 
     # ------------------------------------------------------------------ #
-    #  Build UI
+    #  UI construction
     # ------------------------------------------------------------------ #
 
     def _init_ui(self) -> None:
-        # Left panel: factor selection + options
         left = QtWidgets.QWidget()
-        left.setFixedWidth(240)
+        left.setFixedWidth(260)
         left_vbox = QtWidgets.QVBoxLayout(left)
         left_vbox.setContentsMargins(4, 4, 4, 4)
+        left_vbox.setSpacing(6)
 
-        # Result factor checkboxes
         rf_group = QtWidgets.QGroupBox("绩效因子")
         rf_layout = QtWidgets.QVBoxLayout(rf_group)
         self._rf_checks: dict[str, QtWidgets.QCheckBox] = {}
         for name, label, default in _BUILTIN_RESULT_FACTORS:
             cb = QtWidgets.QCheckBox(label)
             cb.setChecked(default)
-            cb.setObjectName(name)
             rf_layout.addWidget(cb)
             self._rf_checks[name] = cb
 
-        # Bar factor checkboxes
-        bf_group = QtWidgets.QGroupBox("行情因子（需提供K线数据）")
-        bf_layout = QtWidgets.QVBoxLayout(bf_group)
-        self._bf_checks: dict[str, QtWidgets.QCheckBox] = {}
-        for name, label, default in _BUILTIN_BAR_FACTORS:
-            cb = QtWidgets.QCheckBox(label)
-            cb.setChecked(default)
-            cb.setObjectName(name)
-            cb.setEnabled(bool(self._bars_map))
-            bf_layout.addWidget(cb)
-            self._bf_checks[name] = cb
-
-        # Return column
-        ret_group = QtWidgets.QGroupBox("对标收益列")
+        ret_group = QtWidgets.QGroupBox("对标收益列（IC 分析）")
         ret_layout = QtWidgets.QVBoxLayout(ret_group)
         self._return_combo = QtWidgets.QComboBox()
         self._return_combo.addItems(_RETURN_COLS)
         ret_layout.addWidget(self._return_combo)
 
-        # Layer count
         layer_layout = QtWidgets.QHBoxLayout()
         layer_layout.addWidget(QtWidgets.QLabel("分层数："))
         self._layer_spin = QtWidgets.QSpinBox()
@@ -117,47 +102,63 @@ class FactorAnalysisDialog(QtWidgets.QDialog):
         layer_layout.addWidget(self._layer_spin)
         layer_layout.addStretch()
 
-        # Run button
+        rank_group = QtWidgets.QGroupBox("综合排名 / 选股")
+        rank_layout = QtWidgets.QVBoxLayout(rank_group)
+        self._equal_weight_rb  = QtWidgets.QRadioButton("均等权重")
+        self._custom_weight_rb = QtWidgets.QRadioButton("夏普x4 / 卡玛x3 / 胜率x2 / 收益x1")
+        self._equal_weight_rb.setChecked(True)
+        top_n_layout = QtWidgets.QHBoxLayout()
+        top_n_layout.addWidget(QtWidgets.QLabel("选股 Top N："))
+        self._top_n_spin = QtWidgets.QSpinBox()
+        self._top_n_spin.setRange(1, 500)
+        self._top_n_spin.setValue(20)
+        top_n_layout.addWidget(self._top_n_spin)
+        top_n_layout.addStretch()
+        rank_layout.addWidget(self._equal_weight_rb)
+        rank_layout.addWidget(self._custom_weight_rb)
+        rank_layout.addLayout(top_n_layout)
+
         self._run_btn = QtWidgets.QPushButton("运行分析")
+        self._run_btn.setFixedHeight(32)
         self._run_btn.clicked.connect(self._run_analysis)
 
         left_vbox.addWidget(rf_group)
-        left_vbox.addWidget(bf_group)
         left_vbox.addWidget(ret_group)
         left_vbox.addLayout(layer_layout)
+        left_vbox.addWidget(rank_group)
         left_vbox.addWidget(self._run_btn)
         left_vbox.addStretch()
 
-        # Right panel: tabs for IC / Layer / Corr
         self._tabs = QtWidgets.QTabWidget()
-
-        self._ic_table    = _ResultTable(["因子", "IC (Pearson)", "RankIC (Spearman)"])
+        self._ic_table    = _ResultTable(["因子", "IC (Pearson)", "RankIC (Spearman)", "RankIC |绝对值|"])
         self._layer_table = _ResultTable(["层", "数量", "均值收益%", "中位收益%", "标准差%"])
         self._corr_table  = _ResultTable([])
-
+        self._rank_table  = _ResultTable([
+            "综合排名", "股票代码", "名称", "综合评分",
+            "夏普比率", "总收益%", "年化收益%", "最大回撤%",
+            "卡玛比率", "日胜率%", "是否选中",
+        ])
         self._tabs.addTab(self._ic_table,    "IC / RankIC")
         self._tabs.addTab(self._layer_table, "分层收益")
         self._tabs.addTab(self._corr_table,  "相关矩阵")
+        self._tabs.addTab(self._rank_table,  "综合排名")
 
-        # Status label
-        self._status_label = QtWidgets.QLabel(
-            f"就绪：{len(self._results)} 只股票"
-        )
+        self._status_label = QtWidgets.QLabel(f"就绪：{len(self._results)} 只股票")
+        close_btn = QtWidgets.QPushButton("关闭")
+        close_btn.clicked.connect(self.close)
+        bottom = QtWidgets.QHBoxLayout()
+        bottom.addWidget(self._status_label, 1)
+        bottom.addWidget(close_btn)
 
-        # Main layout
         h_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         h_splitter.addWidget(left)
         h_splitter.addWidget(self._tabs)
         h_splitter.setStretchFactor(0, 0)
         h_splitter.setStretchFactor(1, 1)
 
-        close_btn = QtWidgets.QPushButton("关闭")
-        close_btn.clicked.connect(self.close)
-
         vbox = QtWidgets.QVBoxLayout(self)
         vbox.addWidget(h_splitter)
-        vbox.addWidget(self._status_label)
-        vbox.addWidget(close_btn, 0, QtCore.Qt.AlignmentFlag.AlignRight)
+        vbox.addLayout(bottom)
 
     # ------------------------------------------------------------------ #
     #  Analysis execution
@@ -167,7 +168,6 @@ class FactorAnalysisDialog(QtWidgets.QDialog):
         self._run_btn.setEnabled(False)
         self._status_label.setText("运行中…")
         QtWidgets.QApplication.processEvents()
-
         try:
             self._do_analysis()
         except Exception as e:
@@ -177,12 +177,11 @@ class FactorAnalysisDialog(QtWidgets.QDialog):
             self._run_btn.setEnabled(True)
 
     def _do_analysis(self) -> None:
-        from ..factor import FactorEngine
+        from ..factor.factor_engine import FactorEngine
         from ..factor.factor_template import (
             SharpeRatioFactor, TotalReturnFactor, AnnualReturnFactor,
             MaxDrawdownFactor, CalmarRatioFactor, ReturnDrawdownRatioFactor,
             EwmSharpeFactor, TradingFrequencyFactor,
-            PriceMomentumFactor, VolatilityFactor, RSIFactor,
         )
 
         _rf_cls_map = {
@@ -195,99 +194,142 @@ class FactorAnalysisDialog(QtWidgets.QDialog):
             "ewm_sharpe":            EwmSharpeFactor,
             "daily_trade_count":     TradingFrequencyFactor,
         }
-        _bf_cls_map = {
-            "price_momentum_60b": lambda: PriceMomentumFactor(60),
-            "volatility_60b":     lambda: VolatilityFactor(60),
-            "rsi_14":             lambda: RSIFactor(14),
-        }
 
-        engine = FactorEngine()
+        selected_names = [n for n, cb in self._rf_checks.items() if cb.isChecked()]
+        if not selected_names:
+            raise ValueError("请至少勾选一个绩效因子")
 
-        for name, cb in self._rf_checks.items():
-            if cb.isChecked() and name in _rf_cls_map:
-                engine.register(_rf_cls_map[name]())
+        if self._custom_weight_rb.isChecked():
+            weights = {"sharpe_ratio": 4.0, "calmar_ratio": 3.0,
+                       "win_rate": 2.0, "total_return": 1.0}
+        else:
+            weights = {name: 1.0 for name in selected_names}
 
-        if self._bars_map:
-            for name, cb in self._bf_checks.items():
-                if cb.isChecked() and name in _bf_cls_map:
-                    engine.register(_bf_cls_map[name]())
+        top_n = self._top_n_spin.value()
 
-        if not engine.factor_names:
-            raise ValueError("请至少勾选一个因子")
+        # Tab 4: 综合排名（run() 路径，直读 BatchBacktestResult 字段）
+        rank_engine = FactorEngine()
+        for name in selected_names:
+            if name in _rf_cls_map:
+                rank_engine.register(_rf_cls_map[name]())
 
+        rank_engine.run(self._results, weights=weights, selector_top_n=top_n)
+
+        self._rank_table.clear_rows()
+        ranked = sorted(
+            [r for r in self._results if r.factor_rank is not None],
+            key=lambda r: r.factor_rank,
+        )
+        unranked = [r for r in self._results if r.factor_rank is None]
+        for r in ranked:
+            self._rank_table.add_row([
+                str(r.factor_rank) if r.factor_rank is not None else "-", r.vt_symbol, r.name or "-",
+                f"{r.composite_score:.3f}" if r.composite_score is not None else "-", f"{r.sharpe_ratio:.3f}",
+                f"{r.total_return:.2f}", f"{r.annual_return:.2f}",
+                f"{r.max_ddpercent:.2f}", f"{r.calmar_ratio:.3f}",
+                f"{r.win_rate:.2f}", "YES" if r.selected else "",
+            ])
+        for r in unranked:
+            self._rank_table.add_row(
+                ["-", r.vt_symbol, r.name or "-"] + ["-"] * 8
+            )
+
+        # IC / 分层 / 相关矩阵（pandas 直接计算，不走旧 calculate()）
         return_col = self._return_combo.currentText()
         n_layers   = self._layer_spin.value()
+        success    = [r for r in self._results if r.status == "success"]
+        if not success:
+            self._status_label.setText("无成功结果，跳过 IC/分层分析")
+            self._tabs.setCurrentIndex(3)
+            return
 
-        df = engine.calculate(self._results, bars_map=self._bars_map)
-        self._factor_df = df
+        import pandas as pd
+        rows: dict[str, dict] = {}
+        for r in success:
+            row: dict = {}
+            for name in selected_names:
+                raw = getattr(r, name, None)
+                if raw is not None:
+                    try:
+                        row[name] = float(raw)
+                    except (TypeError, ValueError):
+                        pass
+            rcol_val = getattr(r, return_col, 0.0)
+            try:
+                row[return_col] = float(rcol_val)
+            except (TypeError, ValueError):
+                row[return_col] = 0.0
+            rows[r.vt_symbol] = row
+        fdf = pd.DataFrame(rows).T
+        factor_cols = [c for c in selected_names if c in fdf.columns]
 
-        factor_cols = [c for c in engine.factor_names if c in df.columns]
-
-        # ---- IC table ----
-        pearson  = engine.cross_section_ic(df, return_col, "pearson")
-        spearman = engine.cross_section_ic(df, return_col, "spearman")
-
+        # Tab 1: IC
         self._ic_table.clear_rows()
         for col in factor_cols:
-            p = pearson.get(col, float("nan"))
-            s = spearman.get(col, float("nan"))
-            self._ic_table.add_row([
-                col,
-                f"{p:.4f}" if p == p else "N/A",
-                f"{s:.4f}" if s == s else "N/A",
-            ])
+            if return_col not in fdf.columns:
+                self._ic_table.add_row([col, "N/A", "N/A", "N/A"])
+                continue
+            aligned = pd.concat([fdf[col], fdf[return_col]], axis=1).dropna()
+            if len(aligned) < 3:
+                self._ic_table.add_row([col, "N/A", "N/A", "N/A"])
+                continue
+            ic  = aligned.iloc[:, 0].corr(aligned.iloc[:, 1], method="pearson")
+            ric = aligned.iloc[:, 0].corr(aligned.iloc[:, 1], method="spearman")
+            fmt = lambda v: f"{v:.4f}" if v == v else "N/A"
+            self._ic_table.add_row([col, fmt(ic), fmt(ric),
+                                    fmt(abs(ric)) if ric == ric else "N/A"])
 
-        # ---- Layer table ----
-        try:
-            best = spearman.abs().idxmax()
-            layer_df = engine.layer_analysis(
-                df, return_col=return_col,
-                n_layers=n_layers, factor_col=best,
-            )
-            self._layer_table.clear_rows()
-            self._layer_table.setHorizontalHeaderLabels([
-                "层", "数量", "均值收益%", "中位收益%", "标准差%"
-            ])
-            for lid, row in layer_df.iterrows():
-                self._layer_table.add_row([
-                    str(lid),
-                    str(int(row["count"])),
-                    f"{row['mean_return']:.2f}",
-                    f"{row['median_return']:.2f}",
-                    f"{row['std_return']:.2f}",
-                ])
-        except Exception as e:
-            self._layer_table.clear_rows()
-            self._layer_table.add_row([f"分层失败：{e}", "", "", "", ""])
+        # Tab 2: 分层
+        self._layer_table.clear_rows()
+        if factor_cols and return_col in fdf.columns:
+            try:
+                rank_ics = {
+                    c: abs(fdf[c].corr(fdf[return_col], method="spearman") or 0)
+                    for c in factor_cols
+                }
+                best = max(rank_ics, key=lambda c: rank_ics[c])
+                df2 = fdf[[best, return_col]].dropna().copy()
+                df2["_layer"] = pd.qcut(df2[best], q=n_layers,
+                                        labels=False, duplicates="drop")
+                for lid in sorted(df2["_layer"].dropna().unique()):
+                    grp = df2[df2["_layer"] == lid]
+                    self._layer_table.add_row([
+                        str(int(lid) + 1), str(len(grp)),
+                        f"{grp[return_col].mean():.2f}",
+                        f"{grp[return_col].median():.2f}",
+                        f"{grp[return_col].std():.2f}",
+                    ])
+            except Exception as e:
+                self._layer_table.add_row([f"分层失败：{e}", "", "", "", ""])
 
-        # ---- Correlation table ----
+        # Tab 3: 相关矩阵
         try:
-            corr = engine.correlation_matrix(df, "spearman")
+            corr = fdf[factor_cols].corr(method="spearman")
             cols = list(corr.columns)
             self._corr_table.setColumnCount(len(cols) + 1)
             self._corr_table.setHorizontalHeaderLabels(["因子"] + cols)
             self._corr_table.clear_rows()
             for idx in corr.index:
-                row_data = [idx] + [f"{corr.loc[idx, c]:.3f}" for c in cols]
-                self._corr_table.add_row(row_data)
+                self._corr_table.add_row(
+                    [idx] + [f"{corr.loc[idx, c]:.3f}" for c in cols]
+                )
         except Exception as e:
             self._corr_table.clear_rows()
             self._corr_table.add_row([f"相关矩阵失败：{e}"])
 
-        n_valid = df[factor_cols[0]].notna().sum() if factor_cols else 0
+        n_sel = sum(1 for r in self._results if getattr(r, 'selected', False))
         self._status_label.setText(
-            f"分析完成：{len(df)} 只股票，{len(factor_cols)} 个因子，"
-            f"有效数据 {n_valid} 只，对标列={return_col}"
+            f"完成：{len(success)} 只有效，{len(factor_cols)} 个因子，"
+            f"对标={return_col}，选中 {n_sel} 只"
         )
-        self._tabs.setCurrentIndex(0)
+        self._tabs.setCurrentIndex(3)
 
 
 # ------------------------------------------------------------------ #
-#  Simple reusable table widget
+#  简单表格辅助类
 # ------------------------------------------------------------------ #
 
 class _ResultTable(QtWidgets.QTableWidget):
-    """Minimal table used inside FactorAnalysisDialog."""
 
     def __init__(self, headers: list[str]) -> None:
         super().__init__()
@@ -299,6 +341,7 @@ class _ResultTable(QtWidgets.QTableWidget):
         self.setAlternatingRowColors(True)
         self.setSortingEnabled(True)
         self.horizontalHeader().setStretchLastSection(True)
+        self.setSelectionBehavior(self.SelectionBehavior.SelectRows)
 
     def clear_rows(self) -> None:
         self.setRowCount(0)

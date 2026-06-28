@@ -1,94 +1,127 @@
 """
-FactorTemplate
+factor/factor_template.py
 
-Abstract base class for all factors in the batch research system.
+FactorTemplate  —  所有因子的抽象基类
+BBRFactor       —  基于 BatchBacktestResult 强类型字段的新路径基类（推荐使用）
+ResultFactor    —  旧路径基类（从 BacktestResult.statistics dict 读值，deprecated）
+BarFactor       —  基于 BarData 原始数据的因子基类
 
-A "factor" here operates on a list of BacktestResult objects (cross-sectional)
-and returns a pd.Series indexed by vt_symbol with the factor values.
-
-Factor types supported:
-  - ResultFactor:  reads statistics fields from BacktestResult directly
-                   (e.g. Sharpe, MaxDD, Calmar, Momentum, Volatility)
-  - BarFactor:     computes from raw BarData (e.g. price momentum, RSI, MACD)
-  - CustomFactor:  fully user-defined via subclassing
-
-Naming convention:
-  factor_name must be unique within a FactorEngine instance.
-  Use snake_case, e.g. 'sharpe_ratio', 'momentum_12m', 'max_ddpercent'.
-
-Usage::
-
-    class MyFactor(FactorTemplate):
-        factor_name = "my_factor"
-
-        def calculate(self, results, **kwargs):
-            return pd.Series(
-                {r.vt_symbol: some_value(r) for r in results if r.statistics}
-            )
-
-    engine = FactorEngine()
-    engine.register(MyFactor())
-    factor_df = engine.calculate(results)
+迁移说明：
+  新代码应继承 BBRFactor，旧代码继承 ResultFactor 不受影响（向后兼容）。
+  BBRFactor._extract() 直接读 BatchBacktestResult 强类型字段，
+  不依赖 r.statistics dict，与重构后的数据模型完全对齐。
 """
 
 from __future__ import annotations
 
+import math
+import warnings
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import pandas as pd
     from ..task import BacktestResult
+    from ..batch_result import BatchBacktestResult
 
+
+# ──────────────────────────────────────────────────── #
+#  FactorTemplate  —  抽象基类
+# ──────────────────────────────────────────────────── #
 
 class FactorTemplate(ABC):
     """
-    Abstract base class for cross-sectional factors.
+    所有因子的抽象基类。
 
-    Subclasses must:
-      1. Set a unique class-level ``factor_name`` string.
-      2. Implement ``calculate(results, **kwargs) -> pd.Series``.
+    子类必须：
+      1. 设置唯一的类级别 factor_name 字符串
+      2. 实现 calculate(results, **kwargs) -> pd.Series
 
-    The returned Series must:
-      - Be indexed by vt_symbol strings
-      - Contain numeric values (float / int)
-      - Exclude symbols where the factor cannot be computed (NaN or omit)
+    返回的 Series 必须：
+      - 以 vt_symbol 字符串为 index
+      - 包含数值（float / int）
+      - 跳过无法计算的 symbol（不包含 NaN，直接 omit）
     """
 
     factor_name: str = ""
-
-    # Optional metadata — used by FactorEngine reports
     description: str = ""
-    higher_is_better: bool = True   # for display in rank/IC reports
+    higher_is_better: bool = True
 
     @abstractmethod
     def calculate(
         self,
-        results: list["BacktestResult"],
+        results: list,
         **kwargs,
     ) -> "pd.Series":
-        """
-        Compute factor values cross-sectionally.
-
-        :param results: List of BacktestResult objects from BatchBacktestingEngine.
-        :param kwargs:  Optional additional data (bars_map, fundamental_data, etc.)
-        :return:        pd.Series(values, index=vt_symbols), numeric dtype.
-        """
+        """计算截面因子值，返回 pd.Series(values, index=vt_symbols)。"""
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(name={self.factor_name!r})"
 
 
-# ------------------------------------------------------------------ #
-#  Convenience base for factors that read BacktestResult.statistics
-# ------------------------------------------------------------------ #
+# ──────────────────────────────────────────────────── #
+#  BBRFactor  —  新路径：接受 BatchBacktestResult
+# ──────────────────────────────────────────────────── #
+
+class BBRFactor(FactorTemplate):
+    """
+    基于 BatchBacktestResult 强类型字段的因子基类（推荐使用）。
+
+    子类只需实现 _extract(result: BatchBacktestResult) -> float | None。
+    status != "success" 的结果自动跳过。
+    NaN / Inf 值自动过滤。
+
+    示例::
+
+        class MyFactor(BBRFactor):
+            factor_name = "my_custom_factor"
+            higher_is_better = True
+
+            def _extract(self, result: BatchBacktestResult) -> float | None:
+                if result.total_trade_count < 10:
+                    return None
+                return result.sharpe_ratio * result.calmar_ratio
+    """
+
+    def calculate(
+        self,
+        results: list["BatchBacktestResult"],
+        **kwargs,
+    ) -> "pd.Series":
+        import pandas as pd  # noqa: PLC0415
+
+        data: dict[str, float] = {}
+        for r in results:
+            if getattr(r, "status", "") != "success":
+                continue
+            val = self._extract(r)
+            if val is None:
+                continue
+            try:
+                fval = float(val)
+                if not math.isnan(fval) and not math.isinf(fval):
+                    data[r.vt_symbol] = fval
+            except (TypeError, ValueError):
+                pass
+
+        return pd.Series(data, name=self.factor_name)
+
+    def _extract(self, result: "BatchBacktestResult") -> float | None:
+        """从 BatchBacktestResult 提取因子值，None 表示跳过该 symbol。"""
+        raise NotImplementedError
+
+
+# ──────────────────────────────────────────────────── #
+#  ResultFactor  —  旧路径（deprecated，保持向后兼容）
+# ──────────────────────────────────────────────────── #
 
 class ResultFactor(FactorTemplate):
     """
-    Base class for factors derived directly from BacktestResult statistics.
+    从 BacktestResult.statistics dict 读取因子值的旧路径基类。
 
-    Subclasses only need to override ``_extract(result) -> float | None``.
-    Symbols with no statistics (FAILED/SKIPPED) are automatically excluded.
+    .. deprecated::
+        请改用 BBRFactor，直接读 BatchBacktestResult 强类型字段。
+        本类保留以兼容现有代码，未来版本可能移除。
     """
 
     def calculate(
@@ -100,153 +133,146 @@ class ResultFactor(FactorTemplate):
 
         data: dict[str, float] = {}
         for r in results:
-            if not r.statistics:
+            if not getattr(r, "statistics", None):
                 continue
             val = self._extract(r)
-            if val is not None:
-                import math
-                if not math.isnan(val) and not math.isinf(val):
-                    data[r.vt_symbol] = val
+            if val is None:
+                continue
+            try:
+                fval = float(val)
+                if not math.isnan(fval) and not math.isinf(fval):
+                    data[r.vt_symbol] = fval
+            except (TypeError, ValueError):
+                pass
+
         return pd.Series(data, name=self.factor_name)
 
     def _extract(self, result: "BacktestResult") -> float | None:
-        """
-        Extract a numeric value from one BacktestResult.
-        Return None to exclude this symbol from the factor.
-        """
+        """从旧版 BacktestResult 提取因子值，None 表示跳过。"""
         raise NotImplementedError
 
 
-# ------------------------------------------------------------------ #
-#  Built-in ResultFactors
-# ------------------------------------------------------------------ #
+# ──────────────────────────────────────────────────── #
+#  内置 BBRFactor 实现（从旧 ResultFactor 迁移而来）
+# ──────────────────────────────────────────────────── #
 
-class SharpeRatioFactor(ResultFactor):
-    factor_name = "sharpe_ratio"
-    description = "Annualised Sharpe ratio from backtesting"
+class SharpeRatioFactor(BBRFactor):
+    factor_name      = "sharpe_ratio"
+    description      = "Annualised Sharpe ratio"
     higher_is_better = True
 
-    def _extract(self, result: "BacktestResult") -> float | None:
-        return result.sharpe_ratio
+    def _extract(self, r: "BatchBacktestResult") -> float | None:
+        return r.sharpe_ratio
 
 
-class TotalReturnFactor(ResultFactor):
-    factor_name = "total_return"
-    description = "Total return (%) over the backtest period"
+class TotalReturnFactor(BBRFactor):
+    factor_name      = "total_return"
+    description      = "Total return (%) over the backtest period"
     higher_is_better = True
 
-    def _extract(self, result: "BacktestResult") -> float | None:
-        return result.total_return
+    def _extract(self, r: "BatchBacktestResult") -> float | None:
+        return r.total_return
 
 
-class AnnualReturnFactor(ResultFactor):
-    factor_name = "annual_return"
-    description = "Annualised return (%) from backtesting"
+class AnnualReturnFactor(BBRFactor):
+    factor_name      = "annual_return"
+    description      = "Annualised return (%)"
     higher_is_better = True
 
-    def _extract(self, result: "BacktestResult") -> float | None:
-        return result.annual_return
+    def _extract(self, r: "BatchBacktestResult") -> float | None:
+        return r.annual_return
 
 
-class MaxDrawdownFactor(ResultFactor):
-    factor_name = "max_ddpercent"
-    description = "Maximum drawdown (%), lower is better (more negative = worse)"
-    higher_is_better = True   # less negative = better
-
-    def _extract(self, result: "BacktestResult") -> float | None:
-        return result.max_ddpercent
-
-
-class CalmarRatioFactor(ResultFactor):
-    factor_name = "calmar_ratio"
-    description = "Calmar ratio: annual_return / abs(max_ddpercent)"
+class MaxDrawdownFactor(BBRFactor):
+    factor_name      = "max_ddpercent"
+    description      = "Maximum drawdown (%), less negative = better"
     higher_is_better = True
 
-    def _extract(self, result: "BacktestResult") -> float | None:
-        mdd = abs(result.max_ddpercent)
-        if mdd == 0:
-            return None
-        return result.annual_return / mdd
+    def _extract(self, r: "BatchBacktestResult") -> float | None:
+        return r.max_ddpercent
 
 
-class ReturnDrawdownRatioFactor(ResultFactor):
-    factor_name = "return_drawdown_ratio"
-    description = "Return-to-drawdown ratio from BacktestingEngine"
+class CalmarRatioFactor(BBRFactor):
+    factor_name      = "calmar_ratio"
+    description      = "Calmar ratio: annual_return / abs(max_ddpercent)"
     higher_is_better = True
 
-    def _extract(self, result: "BacktestResult") -> float | None:
-        return result.statistics.get("return_drawdown_ratio")
+    def _extract(self, r: "BatchBacktestResult") -> float | None:
+        return r.calmar_ratio
 
 
-class WinRateFactor(ResultFactor):
-    """
-    Per-symbol win rate: fraction of winning trades.
-    Requires trade-level stats; falls back to statistics dict lookup.
-    """
-    factor_name = "win_rate"
-    description = "Trade-level win rate (%)"
+class ReturnDrawdownRatioFactor(BBRFactor):
+    factor_name      = "return_drawdown_ratio"
+    description      = "Return-to-drawdown ratio"
     higher_is_better = True
 
-    def _extract(self, result: "BacktestResult") -> float | None:
-        stats = result.statistics
-        total = stats.get("total_trade_count", 0)
-        if not total:
-            return None
-        # BacktestingEngine doesn't expose winning_trade_count directly,
-        # so we derive it from daily_net_pnl sign heuristic if available,
-        # or return None to omit.
-        return stats.get("win_rate")   # populated by enrich_statistics if present
+    def _extract(self, r: "BatchBacktestResult") -> float | None:
+        return r.return_drawdown_ratio
 
 
-class TradingFrequencyFactor(ResultFactor):
-    factor_name = "daily_trade_count"
-    description = "Average daily trade count"
-    higher_is_better = False   # more trading = higher costs
-
-    def _extract(self, result: "BacktestResult") -> float | None:
-        return result.statistics.get("daily_trade_count")
-
-
-class EwmSharpeFactor(ResultFactor):
-    factor_name = "ewm_sharpe"
-    description = "Exponentially-weighted Sharpe ratio"
+class WinRateFactor(BBRFactor):
+    factor_name      = "win_rate"
+    description      = "Daily win rate (%)"
     higher_is_better = True
 
-    def _extract(self, result: "BacktestResult") -> float | None:
-        return result.statistics.get("ewm_sharpe")
+    def _extract(self, r: "BatchBacktestResult") -> float | None:
+        return r.win_rate if r.win_rate else None
 
 
-class ProfitFactorFactor(ResultFactor):
-    """profit_factor added by StatisticsAnalyzer.enrich()."""
-    factor_name = "profit_factor"
-    description = "Gross profit / gross cost ratio"
+class TradingFrequencyFactor(BBRFactor):
+    factor_name      = "daily_trade_count"
+    description      = "Average daily trade count"
+    higher_is_better = False
+
+    def _extract(self, r: "BatchBacktestResult") -> float | None:
+        return r.daily_trade_count if r.daily_trade_count else None
+
+
+class EwmSharpeFactor(BBRFactor):
+    factor_name      = "ewm_sharpe"
+    description      = "Exponentially-weighted Sharpe ratio"
     higher_is_better = True
 
-    def _extract(self, result: "BacktestResult") -> float | None:
-        return result.statistics.get("profit_factor")
+    def _extract(self, r: "BatchBacktestResult") -> float | None:
+        return r.ewm_sharpe if r.ewm_sharpe else None
 
 
-# ------------------------------------------------------------------ #
-#  BarFactor base class (for price/volume momentum, RSI, MACD, etc.)
-# ------------------------------------------------------------------ #
+class ProfitFactorFactor(BBRFactor):
+    factor_name      = "profit_factor"
+    description      = "Gross profit / gross cost ratio"
+    higher_is_better = True
+
+    def _extract(self, r: "BatchBacktestResult") -> float | None:
+        return r.profit_factor if r.profit_factor else None
+
+
+class AnnualVolatilityFactor(BBRFactor):
+    factor_name      = "annual_volatility"
+    description      = "Annualised volatility (%)"
+    higher_is_better = False
+
+    def _extract(self, r: "BatchBacktestResult") -> float | None:
+        return r.annual_volatility if r.annual_volatility else None
+
+
+# ──────────────────────────────────────────────────── #
+#  BarFactor  —  基于原始 BarData 的因子基类
+# ──────────────────────────────────────────────────── #
 
 class BarFactor(FactorTemplate):
     """
-    Base class for factors computed from raw BarData.
+    基于原始 BarData 计算的因子基类。
 
-    calculate() receives both results (for metadata) and
-    bars_map (vt_symbol -> list[BarData]) via kwargs.
-
-    Subclasses override _compute_for_symbol(symbol, bars) -> float | None.
+    子类覆盖 _compute_for_symbol(symbol, bars) -> float | None。
+    bars_map 通过 kwargs["bars_map"] 传入。
     """
 
     def calculate(
         self,
-        results: list["BacktestResult"],
+        results: list,
         **kwargs,
     ) -> "pd.Series":
         import pandas as pd  # noqa: PLC0415
-        import math
 
         bars_map: dict = kwargs.get("bars_map", {})
         data: dict[str, float] = {}
@@ -256,8 +282,14 @@ class BarFactor(FactorTemplate):
             if not bars:
                 continue
             val = self._compute_for_symbol(r.vt_symbol, bars)
-            if val is not None and not math.isnan(val) and not math.isinf(val):
-                data[r.vt_symbol] = val
+            if val is None:
+                continue
+            try:
+                fval = float(val)
+                if not math.isnan(fval) and not math.isinf(fval):
+                    data[r.vt_symbol] = fval
+            except (TypeError, ValueError):
+                pass
 
         return pd.Series(data, name=self.factor_name)
 
@@ -269,18 +301,14 @@ class BarFactor(FactorTemplate):
         raise NotImplementedError
 
 
-# ------------------------------------------------------------------ #
-#  Built-in BarFactors
-# ------------------------------------------------------------------ #
+# ──────────────────────────────────────────────────── #
+#  内置 BarFactor 实现
+# ──────────────────────────────────────────────────── #
 
 class PriceMomentumFactor(BarFactor):
-    """
-    Price momentum: return over a trailing window of bars.
-
-    momentum = (close[-1] - close[-lookback]) / close[-lookback]
-    """
-    factor_name = "price_momentum"
-    description = "Price momentum over trailing N bars"
+    """价格动量因子：trailing N bar 的收益率。"""
+    factor_name      = "price_momentum"
+    description      = "Price momentum over trailing N bars"
     higher_is_better = True
 
     def __init__(self, lookback: int = 60) -> None:
@@ -291,28 +319,24 @@ class PriceMomentumFactor(BarFactor):
         if len(bars) < self.lookback + 1:
             return None
         start_price = bars[-self.lookback - 1].close_price
-        end_price = bars[-1].close_price
+        end_price   = bars[-1].close_price
         if start_price <= 0:
             return None
         return (end_price - start_price) / start_price * 100
 
 
 class VolatilityFactor(BarFactor):
-    """
-    Realised volatility: annualised std of daily log-returns.
-    lower_is_better in a risk-adjusted context.
-    """
-    factor_name = "volatility_60b"
-    description = "Annualised realised volatility over trailing 60 bars"
+    """实现波动率因子：日对数收益率的年化标准差。"""
+    factor_name      = "volatility_60b"
+    description      = "Annualised realised volatility over trailing 60 bars"
     higher_is_better = False
 
     def __init__(self, lookback: int = 60, annual_days: int = 240) -> None:
-        self.lookback = lookback
+        self.lookback    = lookback
         self.annual_days = annual_days
         self.factor_name = f"volatility_{lookback}b"
 
     def _compute_for_symbol(self, vt_symbol: str, bars: list) -> float | None:
-        import math
         if len(bars) < self.lookback + 1:
             return None
         closes = [b.close_price for b in bars[-self.lookback - 1:]]
@@ -323,20 +347,17 @@ class VolatilityFactor(BarFactor):
         ]
         if len(log_rets) < 2:
             return None
-        n = len(log_rets)
+        n    = len(log_rets)
         mean = sum(log_rets) / n
-        variance = sum((r - mean) ** 2 for r in log_rets) / (n - 1)
-        return math.sqrt(variance * self.annual_days) * 100
+        var  = sum((r - mean) ** 2 for r in log_rets) / (n - 1)
+        return math.sqrt(var * self.annual_days) * 100
 
 
 class RSIFactor(BarFactor):
-    """
-    Relative Strength Index (RSI) computed on trailing close prices.
-    RSI in [0, 100]; higher = more overbought.
-    """
-    factor_name = "rsi_14"
-    description = "RSI over trailing 14 bars"
-    higher_is_better = False   # overbought territory = lower expected return
+    """RSI 因子：相对强弱指标。"""
+    factor_name      = "rsi_14"
+    description      = "RSI over trailing 14 bars"
+    higher_is_better = False
 
     def __init__(self, period: int = 14) -> None:
         self.period = period

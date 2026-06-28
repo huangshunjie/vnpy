@@ -1,75 +1,133 @@
 """
 ui/result_table.py
 
-回测结果表格 Widget — 实时接收 EVENT_BATCH_RESULT 事件，
-逐行追加结果，支持点击列头排序、右键菜单导出 CSV。
+ResultTableWidget  —  批量回测结果表格（ColumnManager 驱动）
+
+设计约定：
+- 所有列定义来自 ColumnManager.get_visible_columns()，动态响应用户配置
+- 接收 BatchBacktestResult（强类型），不再接收 BacktestResult
+- 颜色规则由 ColumnDefinition.color_rule 驱动，_render_cell() 统一处理
+- 预留字段（值为 None）显示 "-"
+- 右键菜单导出 CSV 使用 ExportScope.VISIBLE，与当前显示列完全一致
+- 新增列：只需在 COLUMN_REGISTRY 加一行，此文件无需修改
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from vnpy.event import Event, EventEngine
 from vnpy.trader.engine import MainEngine
 from vnpy.trader.ui import QtCore, QtGui, QtWidgets
 
 from ..base import EVENT_BATCH_RESULT
-from ..task import BacktestResult, TaskStatus
+from ..batch_result import BatchBacktestResult
 
-_COLUMNS: list[tuple[str, str, int, Any]] = [
-    ("股票代码",  "vt_symbol",        120, str),
-    ("状态",      "status",            70, lambda v: v.value if hasattr(v, "value") else str(v)),
-    ("总收益%",   "total_return",      90, lambda v: f"{v:.2f}"),
-    ("年化收益%", "annual_return",     90, lambda v: f"{v:.2f}"),
-    ("夏普比率",  "sharpe_ratio",      90, lambda v: f"{v:.3f}"),
-    ("最大回撤%", "max_ddpercent",     90, lambda v: f"{v:.2f}"),
-    ("卡玛比率",  "calmar_ratio",      90, lambda v: f"{v:.3f}"),
-    ("交易次数",  "total_trade_count", 80, lambda v: str(int(v)) if v else "0"),
-    ("耗时(s)",   "elapsed_seconds",   80, lambda v: f"{v:.2f}" if v else "-"),
-]
-
-# ------------------------------------------------------------------ #
-#  行颜色方案：深色文字 + 高对比度背景，在深色主题下清晰可读
-# ------------------------------------------------------------------ #
-# 每种状态：(背景色, 前景文字色)
-_TEXT_COLOR   = QtGui.QColor("#FFFFFF")         # 白色文字
-_BG_SUCCESS   = QtGui.QColor("#1A6B3A")         # 深绿
-_BG_FAILED    = QtGui.QColor("#7A1F1F")         # 深红
-_BG_SKIPPED   = QtGui.QColor("#5A5A20")         # 深黄
-_BG_DEFAULT   = QtGui.QColor("#2D2D2D")         # 深灰（兜底）
-
-# 盈亏高亮：正值用亮绿色文字，负值用亮红色文字
-_COLOR_POS    = QtGui.QColor("#4CFF82")         # 亮绿
-_COLOR_NEG    = QtGui.QColor("#FF5555")         # 亮红
-_COLOR_NORMAL = QtGui.QColor("#FFFFFF")         # 普通白
+if TYPE_CHECKING:
+    from ..column_manager import ColumnManager
+    from ..column_definition import ColumnDefinition
 
 
-def _pnl_color(val: Any) -> QtGui.QColor:
-    """Return green/red/white for positive/negative/zero numeric values."""
+# ──────────────────────────────────────────────────── #
+#  颜色常量
+# ──────────────────────────────────────────────────── #
+
+_TEXT_WHITE  = QtGui.QColor("#FFFFFF")
+_COLOR_POS   = QtGui.QColor("#4CFF82")
+_COLOR_NEG   = QtGui.QColor("#FF5555")
+_COLOR_WARN  = QtGui.QColor("#FFA500")
+
+_BG_SUCCESS  = QtGui.QColor("#1A6B3A")
+_BG_FAILED   = QtGui.QColor("#7A1F1F")
+_BG_SKIPPED  = QtGui.QColor("#5A5A20")
+_BG_DEFAULT  = QtGui.QColor("#2D2D2D")
+
+_NEG_BAD_RED  = {"max_ddpercent": -20.0, "annual_volatility": 40.0}
+_NEG_BAD_WARN = {"max_ddpercent": -10.0, "annual_volatility": 20.0}
+
+
+def _row_bg(status: str) -> QtGui.QColor:
+    if status == "success": return _BG_SUCCESS
+    if status == "failed":  return _BG_FAILED
+    if status == "skipped": return _BG_SKIPPED
+    return _BG_DEFAULT
+
+
+def _pnl_fg(val: Any) -> QtGui.QColor:
     try:
         f = float(val)
-        if f > 0:
-            return _COLOR_POS
-        if f < 0:
-            return _COLOR_NEG
+        if f > 0: return _COLOR_POS
+        if f < 0: return _COLOR_NEG
     except (TypeError, ValueError):
         pass
-    return _COLOR_NORMAL
+    return _TEXT_WHITE
 
 
-# Columns where we want positive=green / negative=red colouring
-_PNL_COLS = {"total_return", "annual_return", "sharpe_ratio",
-             "calmar_ratio", "return_drawdown_ratio"}
-# max_ddpercent is negative-is-bad but value itself is already negative
-_NEG_COLS = {"max_ddpercent"}
+def _neg_bad_fg(field: str, val: Any) -> QtGui.QColor:
+    try:
+        f = float(val)
+        red_thresh  = _NEG_BAD_RED.get(field, -20.0)
+        warn_thresh = _NEG_BAD_WARN.get(field, -10.0)
+        if field == "annual_volatility":
+            if f >= abs(red_thresh):  return _COLOR_NEG
+            if f >= abs(warn_thresh): return _COLOR_WARN
+        else:
+            if f <= red_thresh:  return _COLOR_NEG
+            if f <= warn_thresh: return _COLOR_WARN
+    except (TypeError, ValueError):
+        pass
+    return _TEXT_WHITE
 
+
+def _format_val(val: Any, col: "ColumnDefinition") -> str:
+    """把原始值按列 fmt 格式化为显示字符串。None → '-'。"""
+    if val is None:
+        return "-"
+    try:
+        fmt = col.fmt
+        if fmt == "pct":    return f"{float(val):.2f}"
+        if fmt == "float1": return f"{float(val):.1f}"
+        if fmt == "float2": return f"{float(val):.2f}"
+        if fmt == "float3": return f"{float(val):.3f}"
+        if fmt == "int":    return str(int(float(val)))
+        if fmt == "money":  return f"{float(val):,.0f}"
+        return str(val)
+    except (TypeError, ValueError):
+        return str(val)
+
+
+# ──────────────────────────────────────────────────── #
+#  _SortableItem
+# ──────────────────────────────────────────────────── #
+
+class _SortableItem(QtWidgets.QTableWidgetItem):
+    """数值感知排序单元格，"-" 排末尾。"""
+
+    def __init__(self, display: str, raw: Any) -> None:
+        super().__init__(display)
+        self._raw = raw
+
+    def __lt__(self, other: QtWidgets.QTableWidgetItem) -> bool:
+        if self.text() == "-": return False
+        if isinstance(other, _SortableItem) and other.text() == "-": return True
+        if isinstance(other, _SortableItem):
+            try:
+                return float(self._raw or 0) < float(other._raw or 0)
+            except (TypeError, ValueError):
+                pass
+        return (self.text() or "") < (other.text() or "")
+
+
+# ──────────────────────────────────────────────────── #
+#  ResultTableWidget
+# ──────────────────────────────────────────────────── #
 
 class ResultTableWidget(QtWidgets.QTableWidget):
     """
-    Live-updating result table.
+    实时更新的批量回测结果表格。
 
-    Sorting stays OFF during live insertion (avoids PySide6 recursion bug).
-    Call enable_sorting() after all rows are inserted.
+    列定义动态来自 ColumnManager，用户通过列设置对话框调整后，
+    表格自动重建列头并用已有结果重新渲染。
     """
 
     signal_result: QtCore.Signal = QtCore.Signal(Event)
@@ -78,27 +136,32 @@ class ResultTableWidget(QtWidgets.QTableWidget):
         self,
         main_engine: MainEngine,
         event_engine: EventEngine,
+        column_manager: "ColumnManager",
     ) -> None:
         super().__init__()
-
-        self.main_engine = main_engine
-        self.event_engine = event_engine
-        self._results: list[BacktestResult] = []
+        self.main_engine    = main_engine
+        self.event_engine   = event_engine
+        self._column_manager = column_manager
+        self._results: list[BatchBacktestResult] = []
 
         self._init_table()
         self._init_menu()
         self._register_event()
 
-    # ------------------------------------------------------------------ #
-    #  Initialisation
-    # ------------------------------------------------------------------ #
+        # 监听列管理变更，自动重建
+        self._column_manager.register_on_change(self._on_columns_changed)
+
+    # ── 初始化 ────────────────────────────────────── #
 
     def _init_table(self) -> None:
-        self.setColumnCount(len(_COLUMNS))
-        self.setHorizontalHeaderLabels([c[0] for c in _COLUMNS])
-
-        for col, (_, _, width, _) in enumerate(_COLUMNS):
-            self.setColumnWidth(col, width)
+        cols = self._column_manager.get_visible_columns()
+        self.setColumnCount(len(cols))
+        self.setHorizontalHeaderLabels([c.header for c in cols])
+        for i, col in enumerate(cols):
+            self.setColumnWidth(i, col.width)
+            hdr = self.horizontalHeaderItem(i)
+            if hdr and col.tooltip:
+                hdr.setToolTip(col.tooltip)
 
         self.verticalHeader().setVisible(False)
         self.setEditTriggers(self.EditTrigger.NoEditTriggers)
@@ -106,28 +169,29 @@ class ResultTableWidget(QtWidgets.QTableWidget):
         self.setSortingEnabled(False)
         self.setSelectionBehavior(self.SelectionBehavior.SelectRows)
         self.horizontalHeader().setStretchLastSection(True)
-
-        # Row height
         self.verticalHeader().setDefaultSectionSize(28)
 
-        # Table-level font
+        # 表头右键菜单
+        self.horizontalHeader().setContextMenuPolicy(
+            QtCore.Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.horizontalHeader().customContextMenuRequested.connect(
+            self._show_header_menu
+        )
+
         font = QtGui.QFont("Microsoft YaHei", 10)
         self.setFont(font)
-
-        # Header style: bold, larger, high-contrast
         hdr_font = QtGui.QFont("Microsoft YaHei", 10, QtGui.QFont.Weight.Bold)
         self.horizontalHeader().setFont(hdr_font)
         self.horizontalHeader().setStyleSheet(
             "QHeaderView::section {"
-            "  background-color: #1E3A5F;"   # 深蓝
+            "  background-color: #1E3A5F;"
             "  color: #FFFFFF;"
             "  padding: 4px;"
             "  border: 1px solid #2A4A7F;"
             "  font-weight: bold;"
             "}"
         )
-
-        # Overall table stylesheet: grid lines visible, selection highlight
         self.setStyleSheet(
             "QTableWidget {"
             "  background-color: #1E1E1E;"
@@ -143,7 +207,9 @@ class ResultTableWidget(QtWidgets.QTableWidget):
         )
 
     def _init_menu(self) -> None:
-        self.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+        self.setContextMenuPolicy(
+            QtCore.Qt.ContextMenuPolicy.CustomContextMenu
+        )
         self.customContextMenuRequested.connect(self._show_context_menu)
 
         self._menu = QtWidgets.QMenu(self)
@@ -152,7 +218,7 @@ class ResultTableWidget(QtWidgets.QTableWidget):
         copy_action.triggered.connect(self._copy_selected)
         self._menu.addAction(copy_action)
 
-        save_action = QtGui.QAction("导出 CSV…", self)
+        save_action = QtGui.QAction("导出 CSV（当前显示列）…", self)
         save_action.triggered.connect(self._save_csv)
         self._menu.addAction(save_action)
 
@@ -160,9 +226,7 @@ class ResultTableWidget(QtWidgets.QTableWidget):
         self.signal_result.connect(self._on_result_event)
         self.event_engine.register(EVENT_BATCH_RESULT, self.signal_result.emit)
 
-    # ------------------------------------------------------------------ #
-    #  Public API
-    # ------------------------------------------------------------------ #
+    # ── 公开 API ─────────────────────────────────── #
 
     def clear_results(self) -> None:
         self.setSortingEnabled(False)
@@ -172,10 +236,10 @@ class ResultTableWidget(QtWidgets.QTableWidget):
     def enable_sorting(self) -> None:
         self.setSortingEnabled(True)
 
-    def get_results(self) -> list[BacktestResult]:
+    def get_results(self) -> list[BatchBacktestResult]:
         return list(self._results)
 
-    def get_selected_result(self) -> BacktestResult | None:
+    def get_selected_result(self) -> BatchBacktestResult | None:
         row = self.currentRow()
         sym_item = self.item(row, 0)
         if sym_item:
@@ -185,71 +249,95 @@ class ResultTableWidget(QtWidgets.QTableWidget):
                     return r
         return None
 
-    # ------------------------------------------------------------------ #
-    #  Event handling
-    # ------------------------------------------------------------------ #
+    def refresh_all_rows(self) -> None:
+        """重新渲染所有行（因子分析写回字段后调用）。"""
+        current_results = list(self._results)
+        self.clear_results()
+        for r in current_results:
+            self._insert_row(r)
+
+    # ── 列管理变更回调 ───────────────────────────── #
+
+    def _on_columns_changed(self) -> None:
+        """ColumnManager 发出变更通知时重建列头并重绘所有行。"""
+        self.setSortingEnabled(False)
+        cols = self._column_manager.get_visible_columns()
+        self.setColumnCount(len(cols))
+        self.setHorizontalHeaderLabels([c.header for c in cols])
+        for i, col in enumerate(cols):
+            self.setColumnWidth(i, col.width)
+            hdr = self.horizontalHeaderItem(i)
+            if hdr and col.tooltip:
+                hdr.setToolTip(col.tooltip)
+        # 重绘所有行
+        self.setRowCount(0)
+        for r in self._results:
+            self._insert_row_internal(r)
+
+    # ── 事件处理 ─────────────────────────────────── #
 
     def _on_result_event(self, event: Event) -> None:
-        self._insert_row(event.data)
+        result = event.data
+        if isinstance(result, BatchBacktestResult):
+            self._insert_row(result)
 
-    def _insert_row(self, result: BacktestResult) -> None:
+    def _insert_row(self, result: BatchBacktestResult) -> None:
         self._results.append(result)
-
-        row = self.rowCount()
-        self.insertRow(row)
-        self.setRowHeight(row, 28)
-
-        # Background colour by status
-        if result.status == TaskStatus.SUCCESS:
-            bg = _BG_SUCCESS
-        elif result.status == TaskStatus.FAILED:
-            bg = _BG_FAILED
-        elif result.status == TaskStatus.SKIPPED:
-            bg = _BG_SKIPPED
-        else:
-            bg = _BG_DEFAULT
-
-        for col, (_, attr, _, fmt_fn) in enumerate(_COLUMNS):
-            raw_val = getattr(result, attr, None)
-
-            if raw_val is None and result.statistics:
-                raw_val = result.statistics.get(attr, None)
-
-            if attr == "calmar_ratio" and result.statistics:
-                mdd = abs(result.max_ddpercent)
-                raw_val = result.annual_return / mdd if mdd > 0 else 0.0
-
-            display = fmt_fn(raw_val) if raw_val is not None else "-"
-
-            item = _SortableItem(display, raw_val)
-            item.setBackground(bg)
-
-            # Text colour: P&L columns get green/red, others white
-            if attr in _PNL_COLS:
-                item.setForeground(_pnl_color(raw_val))
-            elif attr in _NEG_COLS:
-                # max_ddpercent: negative value = bad (red), near-zero = ok
-                item.setForeground(_pnl_color(-(raw_val or 0)))
-            else:
-                item.setForeground(_TEXT_COLOR)
-
-            self.setItem(row, col, item)
-
+        self._insert_row_internal(result)
         self.scrollToBottom()
 
-    # ------------------------------------------------------------------ #
-    #  Context menu actions
-    # ------------------------------------------------------------------ #
+    def _insert_row_internal(self, result: BatchBacktestResult) -> None:
+        """把 BatchBacktestResult 插入到表格末尾（不追加到 _results）。"""
+        cols = self._column_manager.get_visible_columns()
+        row  = self.rowCount()
+        self.insertRow(row)
+        self.setRowHeight(row, 28)
+        bg = _row_bg(result.status)
+
+        for col_idx, col in enumerate(cols):
+            raw     = getattr(result, col.key, None)
+            display = _format_val(raw, col)
+
+            item = _SortableItem(display, raw)
+            item.setBackground(bg)
+            item.setForeground(self._fg_color(col, raw, result.status))
+
+            align_flag = (
+                QtCore.Qt.AlignmentFlag.AlignRight  if col.align == "right"  else
+                QtCore.Qt.AlignmentFlag.AlignLeft   if col.align == "left"   else
+                QtCore.Qt.AlignmentFlag.AlignCenter
+            )
+            item.setTextAlignment(align_flag | QtCore.Qt.AlignmentFlag.AlignVCenter)
+            self.setItem(row, col_idx, item)
+
+    @staticmethod
+    def _fg_color(
+        col: "ColumnDefinition",
+        raw: Any,
+        status: str,
+    ) -> QtGui.QColor:
+        rule = col.color_rule
+        if rule == "pnl":      return _pnl_fg(raw)
+        if rule == "neg_bad":  return _neg_bad_fg(col.key, raw)
+        if rule == "status":   return _TEXT_WHITE
+        return _TEXT_WHITE
+
+    # ── 右键菜单 ─────────────────────────────────── #
 
     def _show_context_menu(self, pos: QtCore.QPoint) -> None:
         self._menu.exec_(self.mapToGlobal(pos))
+
+    def _show_header_menu(self, pos: QtCore.QPoint) -> None:
+        """表头右键：显示列管理菜单。"""
+        menu = self._column_manager.build_header_menu(self)
+        menu.exec_(self.horizontalHeader().mapToGlobal(pos))
 
     def _copy_selected(self) -> None:
         rows = self.selectionModel().selectedRows()
         if not rows:
             return
-        lines: list[str] = []
-        lines.append("\t".join(c[0] for c in _COLUMNS))
+        cols = self._column_manager.get_visible_columns()
+        lines = ["\t".join(c.header for c in cols)]
         for index in rows:
             r = index.row()
             lines.append("\t".join(
@@ -259,40 +347,26 @@ class ResultTableWidget(QtWidgets.QTableWidget):
         QtWidgets.QApplication.clipboard().setText("\n".join(lines))
 
     def _save_csv(self) -> None:
+        """右键导出 CSV：scope=VISIBLE，与当前显示列完全一致。"""
+        if not self._results:
+            QtWidgets.QMessageBox.information(self, "提示", "暂无结果可导出")
+            return
+
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "导出结果 CSV", "", "CSV 文件 (*.csv)"
         )
         if not path:
             return
-        try:
-            import csv
-            with open(path, "w", newline="", encoding="utf-8-sig") as f:
-                writer = csv.writer(f)
-                writer.writerow([c[0] for c in _COLUMNS])
-                for row in range(self.rowCount()):
-                    writer.writerow(
-                        self.item(row, c).text() if self.item(row, c) else ""
-                        for c in range(self.columnCount())
-                    )
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "导出失败", str(e))
 
-
-class _SortableItem(QtWidgets.QTableWidgetItem):
-    """
-    Numeric-aware sortable item. Never calls super().__lt__() to
-    avoid PySide6 C++ override recursion.
-    """
-
-    def __init__(self, display: str, raw_val: Any) -> None:
-        super().__init__(display)
-        self.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self._raw: Any = raw_val
-
-    def __lt__(self, other: "QtWidgets.QTableWidgetItem") -> bool:
-        if isinstance(other, _SortableItem):
-            try:
-                return float(self._raw or 0) < float(other._raw or 0)
-            except (TypeError, ValueError):
-                pass
-        return (self.text() or "") < (other.text() or "")
+        from ..output.csv_exporter import CSVExporter
+        from ..output.exporter import ExportScope
+        result = CSVExporter().export(
+            self._results, path,
+            column_manager=self._column_manager,
+            scope=ExportScope.VISIBLE,
+            include_summary=False,
+        )
+        if result.success:
+            QtWidgets.QMessageBox.information(self, "导出成功", str(result))
+        else:
+            QtWidgets.QMessageBox.critical(self, "导出失败", result.error_msg)

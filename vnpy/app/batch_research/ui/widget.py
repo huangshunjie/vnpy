@@ -3,23 +3,17 @@ ui/widget.py
 
 BatchResearchWidget — 批量回测研究主窗口
 
-布局（垂直三分）：
+布局：
 ┌─────────────────────────────────────────────────────────┐
-│  工具栏：[配置参数] [开始回测] [停止] [导出CSV] [导出Excel] [因子分析]
+│  工具栏：[配置参数] [开始回测] [停止] [导出CSV] [导出Excel]
+│          [列设置] [因子分析] [清空结果]
 ├─────────────────────────────────────────────────────────┤
 │  进度条 + 状态文字                                         │
 ├─────────────────────────────────────────────────────────┤
-│  结果表格（ResultTableWidget，实时追加）                    │
+│  结果表格（ResultTableWidget，实时追加，动态列）             │
 ├─────────────────────────────────────────────────────────┤
 │  日志面板（滚动文本）                                       │
 └─────────────────────────────────────────────────────────┘
-
-事件订阅：
-  EVENT_BATCH_LOG      → 日志面板追加
-  EVENT_BATCH_PROGRESS → 进度条 + 状态更新
-  EVENT_BATCH_RESULT   → 结果表格（由 ResultTableWidget 自行订阅）
-  EVENT_BATCH_FINISHED → 进度条满 + 按钮恢复
-  EVENT_BATCH_STOPPED  → 进度条状态 + 按钮恢复
 """
 
 from __future__ import annotations
@@ -38,19 +32,15 @@ from ..base import (
     EVENT_BATCH_STOPPED,
     ProgressData,
 )
+from ..column_manager import ColumnManager
 from ..engine import BatchResearchEngine
 from .result_table import ResultTableWidget
 from .setting_dialog import SettingDialog
 from .factor_dialog import FactorAnalysisDialog
+from .column_setting_dialog import ColumnSettingDialog
 
 
 class BatchResearchWidget(QtWidgets.QWidget):
-    """
-    Main window for BatchResearch app.
-
-    Registered in BatchResearchApp.widget_name so VeighNa
-    instantiates it when the user opens the app from the menu.
-    """
 
     signal_log:      QtCore.Signal = QtCore.Signal(Event)
     signal_progress: QtCore.Signal = QtCore.Signal(Event)
@@ -70,7 +60,8 @@ class BatchResearchWidget(QtWidgets.QWidget):
             main_engine.get_engine(APP_NAME)  # type: ignore[assignment]
         )
 
-        self._last_config: dict = {}   # remember last dialog settings
+        self._last_config: dict = {}
+        self._column_manager: ColumnManager = ColumnManager()
 
         self._init_ui()
         self._register_events()
@@ -89,6 +80,7 @@ class BatchResearchWidget(QtWidgets.QWidget):
         self._btn_stop    = QtWidgets.QPushButton("■ 停止")
         self._btn_csv     = QtWidgets.QPushButton("导出 CSV")
         self._btn_excel   = QtWidgets.QPushButton("导出 Excel")
+        self._btn_columns = QtWidgets.QPushButton("列设置")
         self._btn_factor  = QtWidgets.QPushButton("因子分析")
         self._btn_clear   = QtWidgets.QPushButton("清空结果")
 
@@ -102,6 +94,7 @@ class BatchResearchWidget(QtWidgets.QWidget):
         self._btn_stop.clicked.connect(self._on_stop)
         self._btn_csv.clicked.connect(self._on_export_csv)
         self._btn_excel.clicked.connect(self._on_export_excel)
+        self._btn_columns.clicked.connect(self._on_column_settings)
         self._btn_factor.clicked.connect(self._on_factor_analysis)
         self._btn_clear.clicked.connect(self._on_clear)
 
@@ -111,7 +104,7 @@ class BatchResearchWidget(QtWidgets.QWidget):
             None,
             self._btn_csv, self._btn_excel,
             None,
-            self._btn_factor, self._btn_clear,
+            self._btn_columns, self._btn_factor, self._btn_clear,
         ):
             if btn is None:
                 toolbar.addStretch()
@@ -136,20 +129,19 @@ class BatchResearchWidget(QtWidgets.QWidget):
         prog_row.addWidget(self._progress_bar, 3)
         prog_row.addWidget(self._status_label, 1)
 
-        # ---- Result table ----
+        # ---- Result table（接入 ColumnManager）----
         self._result_table = ResultTableWidget(
-            self.main_engine, self.event_engine
+            self.main_engine,
+            self.event_engine,
+            self._column_manager,
         )
 
         # ---- Log panel ----
         self._log_text = QtWidgets.QTextEdit()
         self._log_text.setReadOnly(True)
         self._log_text.setMaximumHeight(160)
-        self._log_text.setFont(
-            QtWidgets.QApplication.font()
-        )
 
-        # ---- Splitter (result / log) ----
+        # ---- Splitter ----
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
         splitter.addWidget(self._result_table)
         splitter.addWidget(self._log_text)
@@ -193,11 +185,8 @@ class BatchResearchWidget(QtWidgets.QWidget):
         cfg = dlg.get_config()
         self._last_config = cfg
 
-        # Apply to engine
         if cfg["parameters"].get("strategy_class") is None:
-            QtWidgets.QMessageBox.warning(
-                self, "警告", "未选择策略类，无法运行回测"
-            )
+            QtWidgets.QMessageBox.warning(self, "警告", "未选择策略类，无法运行回测")
             return
 
         self.batch_engine.set_parameters(**cfg["parameters"])
@@ -213,10 +202,9 @@ class BatchResearchWidget(QtWidgets.QWidget):
             return
 
         cfg = self._last_config
-        use_mp = cfg.get("use_multiprocess", False)
+        use_mp  = cfg.get("use_multiprocess", False)
         workers = cfg.get("max_workers", 4)
 
-        # Reset UI state for new run
         self._result_table.clear_results()
         self._progress_bar.setValue(0)
         self._progress_bar.setFormat("0%")
@@ -241,21 +229,34 @@ class BatchResearchWidget(QtWidgets.QWidget):
             self, "导出结果 CSV", "", "CSV 文件 (*.csv)"
         )
         if path:
-            self.batch_engine.export_to_csv(path)
+            from ..output.exporter import ExportScope
+            self.batch_engine.export_to_csv(
+                path,
+                column_manager=self._column_manager,
+                scope=ExportScope.ALL,
+            )
 
     def _on_export_excel(self) -> None:
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "导出结果 Excel", "", "Excel 文件 (*.xlsx)"
         )
         if path:
-            self.batch_engine.export_to_excel(path)
+            from ..output.exporter import ExportScope
+            self.batch_engine.export_to_excel(
+                path,
+                column_manager=self._column_manager,
+                scope=ExportScope.ALL,
+            )
+
+    def _on_column_settings(self) -> None:
+        """打开列设置对话框。"""
+        dlg = ColumnSettingDialog(self._column_manager, parent=self)
+        dlg.exec_()
 
     def _on_factor_analysis(self) -> None:
         results = self.batch_engine.get_results()
         if not results:
-            QtWidgets.QMessageBox.information(
-                self, "提示", "暂无回测结果，请先运行回测"
-            )
+            QtWidgets.QMessageBox.information(self, "提示", "暂无回测结果，请先运行回测")
             return
         dlg = FactorAnalysisDialog(
             results=results,
@@ -263,6 +264,8 @@ class BatchResearchWidget(QtWidgets.QWidget):
             parent=self,
         )
         dlg.exec_()
+        # 因子分析写回了 LF 字段（composite_score / factor_rank 等），刷新表格
+        self._result_table.refresh_all_rows()
 
     def _on_clear(self) -> None:
         self._result_table.clear_results()
@@ -274,19 +277,17 @@ class BatchResearchWidget(QtWidgets.QWidget):
         self._btn_factor.setEnabled(False)
 
     # ------------------------------------------------------------------ #
-    #  Event handlers (always invoked on main thread via Signal)
+    #  Event handlers
     # ------------------------------------------------------------------ #
 
     def _on_log_event(self, event: Event) -> None:
-        msg: str = event.data
-        self._append_log(msg)
+        self._append_log(event.data)
 
     def _on_progress_event(self, event: Event) -> None:
         prog: ProgressData = event.data
         pct = int(prog.percent)
         self._progress_bar.setValue(pct)
         self._progress_bar.setFormat(f"{pct}%")
-
         elapsed = prog.elapsed_seconds
         self._status_label.setText(
             f"{prog.completed}/{prog.total}  "
@@ -297,7 +298,6 @@ class BatchResearchWidget(QtWidgets.QWidget):
     def _on_finished_event(self, event: Event) -> None:
         self._progress_bar.setValue(100)
         self._progress_bar.setFormat("完成 100%")
-
         summary = event.data
         if summary:
             self._status_label.setText(
@@ -305,7 +305,6 @@ class BatchResearchWidget(QtWidgets.QWidget):
                 f"✓{summary.success} ✗{summary.failed} -{summary.skipped}  "
                 f"{summary.elapsed_seconds:.1f}s"
             )
-
         self._result_table.enable_sorting()
         self._btn_run.setEnabled(True)
         self._btn_stop.setEnabled(False)
@@ -319,8 +318,7 @@ class BatchResearchWidget(QtWidgets.QWidget):
         self._result_table.enable_sorting()
         self._btn_run.setEnabled(True)
         self._btn_stop.setEnabled(False)
-        results = self.batch_engine.get_results()
-        if results:
+        if self.batch_engine.get_results():
             self._btn_csv.setEnabled(True)
             self._btn_excel.setEnabled(True)
             self._btn_factor.setEnabled(True)
@@ -332,7 +330,6 @@ class BatchResearchWidget(QtWidgets.QWidget):
     def _append_log(self, msg: str) -> None:
         ts = datetime.now().strftime("%H:%M:%S")
         self._log_text.append(f"[{ts}]  {msg}")
-        # Auto-scroll
         sb = self._log_text.verticalScrollBar()
         sb.setValue(sb.maximum())
 

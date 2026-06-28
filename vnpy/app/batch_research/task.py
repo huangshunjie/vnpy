@@ -116,6 +116,12 @@ class BacktestResult:
     # ---------- 错误信息（status=FAILED 时填充）----------
     error_msg: str = ""
 
+    # L2 预留：逐日净値序列（待 Worker 扩展后填充）
+    daily_results: list | None = None
+
+    # L3 预留：逐笔交易记录（待 Worker 扩展后填充）
+    trades: list | None = None
+
     # ---------- 常用指标快捷属性 ----------
     @property
     def total_return(self) -> float:
