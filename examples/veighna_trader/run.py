@@ -30,6 +30,7 @@ from vnpy_ctabacktester import CtaBacktesterApp
 # from vnpy_excelrtd import ExcelRtdApp
 from vnpy_datamanager import DataManagerApp
 from vnpy.app.batch_research import BatchResearchApp
+import vnpy.app.batch_research.patch_datamanager  # noqa: F401
 # from vnpy_datarecorder import DataRecorderApp
 # from vnpy_riskmanager import RiskManagerApp
 # from vnpy_webtrader import WebTraderApp
