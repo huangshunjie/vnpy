@@ -38,6 +38,8 @@ from .result_table import ResultTableWidget
 from .setting_dialog import SettingDialog
 from .factor_dialog import FactorAnalysisDialog
 from .column_setting_dialog import ColumnSettingDialog
+from .stock_pool_dialog import StockPoolDialog
+from ..manager import StockPoolManager
 
 
 class BatchResearchWidget(QtWidgets.QWidget):
@@ -62,6 +64,7 @@ class BatchResearchWidget(QtWidgets.QWidget):
 
         self._last_config: dict = {}
         self._column_manager: ColumnManager = ColumnManager()
+        self._pool_manager: StockPoolManager = StockPoolManager()
 
         self._init_ui()
         self._register_events()
@@ -80,6 +83,7 @@ class BatchResearchWidget(QtWidgets.QWidget):
         self._btn_stop    = QtWidgets.QPushButton("■ 停止")
         self._btn_csv     = QtWidgets.QPushButton("导出 CSV")
         self._btn_excel   = QtWidgets.QPushButton("导出 Excel")
+        self._btn_pool    = QtWidgets.QPushButton("股票池")
         self._btn_columns = QtWidgets.QPushButton("列设置")
         self._btn_factor  = QtWidgets.QPushButton("因子分析")
         self._btn_clear   = QtWidgets.QPushButton("清空结果")
@@ -94,13 +98,14 @@ class BatchResearchWidget(QtWidgets.QWidget):
         self._btn_stop.clicked.connect(self._on_stop)
         self._btn_csv.clicked.connect(self._on_export_csv)
         self._btn_excel.clicked.connect(self._on_export_excel)
+        self._btn_pool.clicked.connect(self._on_pool)
         self._btn_columns.clicked.connect(self._on_column_settings)
         self._btn_factor.clicked.connect(self._on_factor_analysis)
         self._btn_clear.clicked.connect(self._on_clear)
 
         toolbar = QtWidgets.QHBoxLayout()
         for btn in (
-            self._btn_config, self._btn_run, self._btn_stop,
+            self._btn_config, self._btn_pool, self._btn_run, self._btn_stop,
             None,
             self._btn_csv, self._btn_excel,
             None,
@@ -176,6 +181,9 @@ class BatchResearchWidget(QtWidgets.QWidget):
 
     def _on_config(self) -> None:
         dlg = SettingDialog(parent=self)
+        dlg._pool_manager = self._pool_manager
+        dlg._load_config()        # restore saved config using the shared manager
+        dlg._update_pool_display()
         if self._last_config:
             dlg.set_config(self._last_config)
 
@@ -191,11 +199,22 @@ class BatchResearchWidget(QtWidgets.QWidget):
 
         self.batch_engine.set_parameters(**cfg["parameters"])
         self.batch_engine.set_stock_pool(cfg["symbols"])
+        pool_name = self._pool_manager.current_name
+        pool_n    = len(cfg["symbols"])
         self._append_log(
             f"配置完成：策略={cfg['parameters']['strategy_class'].__name__}  "
-            f"股票池={len(cfg['symbols'])} 只"
+            f"股票池={pool_name!r}（{pool_n} 只）"
         )
         self._btn_run.setEnabled(True)
+
+    def _on_pool(self) -> None:
+        """Open StockPoolDialog from the main toolbar."""
+        dlg = StockPoolDialog(
+            manager=self._pool_manager,
+            initial_name=self._pool_manager.current_name,
+            parent=self,
+        )
+        dlg.exec_()
 
     def _on_run(self) -> None:
         if self.batch_engine.is_running():

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path as _Path
 
 from vnpy.trader.ui import QtCore, QtWidgets
 
-_CONFIG_PATH = Path.home() / ".vnpy" / "batch_research_config.json"
-_HINT_STYLE = "color: #888888; font-size: 11px;"
+from ..manager.stock_pool_manager import StockPoolManager
+from .stock_pool_dialog import StockPoolDialog
+
+_CONFIG_PATH = _Path.home() / ".vnpy" / "batch_research_config.json"
+_HINT_STYLE  = "color: #888888; font-size: 11px;"
 
 
 def _hint(text: str) -> QtWidgets.QLabel:
@@ -28,11 +31,11 @@ def _field_with_hint(widget: QtWidgets.QWidget, hint_text: str) -> QtWidgets.QWi
 
 
 class _ParamTable(QtWidgets.QTableWidget):
-    """策略参数编辑表格：左列参数名+类型（只读），右列参数值（可直接编辑）。"""
+    """策略参数编辑表格：左列参数名+类型（只读），右列参数値（可直接编辑）。"""
 
     def __init__(self) -> None:
         super().__init__(0, 2)
-        self.setHorizontalHeaderLabels(["参数名（类型）", "值"])
+        self.setHorizontalHeaderLabels(["参数名（类型）", "値"])
         self.horizontalHeader().setSectionResizeMode(
             0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
@@ -53,29 +56,26 @@ class _ParamTable(QtWidgets.QTableWidget):
         keys = getattr(strategy_cls, "parameters", [])
         self.setRowCount(len(keys))
         for row, key in enumerate(keys):
-            default = getattr(strategy_cls, key, "")
+            default  = getattr(strategy_cls, key, "")
             val_type = type(default).__name__ if default != "" else "str"
-
             name_item = QtWidgets.QTableWidgetItem(f"{key}  ({val_type})")
             name_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
             from vnpy.trader.ui import QtGui
-            name_item.setForeground(QtGui.QColor('#888888'))
+            name_item.setForeground(QtGui.QColor("#888888"))
             self.setItem(row, 0, name_item)
-
             value = existing.get(key, default) if existing else default
             self.setItem(row, 1, QtWidgets.QTableWidgetItem(str(value)))
-
         self.resizeRowsToContents()
 
     def get_setting(self) -> dict:
         out: dict = {}
         for row in range(self.rowCount()):
-            name_cell = self.item(row, 0)
-            val_cell  = self.item(row, 1)
-            if not name_cell or not val_cell:
+            nc = self.item(row, 0)
+            vc = self.item(row, 1)
+            if not nc or not vc:
                 continue
-            key   = name_cell.text().split("  ")[0].strip()
-            v_str = val_cell.text().strip()
+            key   = nc.text().split("  ")[0].strip()
+            v_str = vc.text().strip()
             try:
                 out[key] = int(v_str)
             except ValueError:
@@ -87,13 +87,12 @@ class _ParamTable(QtWidgets.QTableWidget):
 
     def set_from_dict(self, setting: dict) -> None:
         for row in range(self.rowCount()):
-            name_cell = self.item(row, 0)
-            if not name_cell:
+            nc = self.item(row, 0)
+            if not nc:
                 continue
-            key = name_cell.text().split("  ")[0].strip()
+            key = nc.text().split("  ")[0].strip()
             if key in setting:
                 self.item(row, 1).setText(str(setting[key]))
-
 
 class SettingDialog(QtWidgets.QDialog):
     """批量回测配置对话框，支持配置持久化记忆。"""
@@ -101,101 +100,169 @@ class SettingDialog(QtWidgets.QDialog):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("批量回测配置")
-        self.setMinimumWidth(580)
+        self.setMinimumWidth(820)
+        # StockPoolManager 惰加载，不依赖 Qt
+        self._pool_manager: StockPoolManager | None = None
         self._init_ui()
-        self._load_config()
+        # _load_config() is called by the caller AFTER injecting _pool_manager
+        # so that the restored current_pool_name applies to the correct instance.
+        # When opened standalone (no injection) it is called immediately here.
+        if self._pool_manager is None:
+            self._load_config()
+        self._fit_to_screen()
+
+    @property
+    def pool_manager(self) -> StockPoolManager:
+        """Return (lazily created) shared StockPoolManager instance."""
+        if self._pool_manager is None:
+            self._pool_manager = StockPoolManager()
+        return self._pool_manager
+
+    def _fit_to_screen(self) -> None:
+        screen = QtWidgets.QApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        max_h = int(avail.height() * 0.88)
+        new_h = min(self.sizeHint().height(), max_h)
+        self.resize(self.width(), new_h)
+        self.move(
+            avail.x() + (avail.width()  - self.width())  // 2,
+            avail.y() + (avail.height() - new_h) // 2,
+        )
 
     # ------------------------------------------------------------------ #
     #  Build UI
     # ------------------------------------------------------------------ #
 
     def _init_ui(self) -> None:
-        form = QtWidgets.QFormLayout()
-        form.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
-        form.setFieldGrowthPolicy(
-            QtWidgets.QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
-        )
-        form.setVerticalSpacing(6)
+        def _form() -> QtWidgets.QFormLayout:
+            f = QtWidgets.QFormLayout()
+            f.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+            f.setFieldGrowthPolicy(
+                QtWidgets.QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
+            )
+            f.setVerticalSpacing(6)
+            f.setHorizontalSpacing(10)
+            return f
+
+        # ---- left column: backtest params -------------------------
+        lf = _form()
 
         self._strategy_combo = QtWidgets.QComboBox()
-        self._strategy_combo.setMinimumWidth(260)
         self._populate_strategy_combo()
         self._strategy_combo.currentTextChanged.connect(self._on_strategy_changed)
-        form.addRow("策略类：", self._strategy_combo)
+        lf.addRow("策略类：", self._strategy_combo)
 
         self._start_edit = QtWidgets.QDateEdit(QtCore.QDate(2020, 1, 1))
         self._start_edit.setCalendarPopup(True)
         self._start_edit.setDisplayFormat("yyyy-MM-dd")
-        form.addRow("开始日期：", self._start_edit)
+        lf.addRow("开始日期：", self._start_edit)
 
         self._end_edit = QtWidgets.QDateEdit(QtCore.QDate.currentDate())
         self._end_edit.setCalendarPopup(True)
         self._end_edit.setDisplayFormat("yyyy-MM-dd")
-        form.addRow("结束日期：", self._end_edit)
+        lf.addRow("结束日期：", self._end_edit)
 
         self._capital_spin = QtWidgets.QDoubleSpinBox()
         self._capital_spin.setRange(1_000, 1_000_000_000)
         self._capital_spin.setValue(1_000_000)
         self._capital_spin.setSingleStep(100_000)
         self._capital_spin.setDecimals(0)
-        form.addRow("初始资金：", self._capital_spin)
+        lf.addRow("初始资金：", self._capital_spin)
 
         self._rate_edit = QtWidgets.QLineEdit("0.0001")
-        form.addRow("手续费率：", _field_with_hint(
+        lf.addRow("手续费率：", _field_with_hint(
             self._rate_edit, "示例：0.0001（万分之一）"))
 
         self._slippage_edit = QtWidgets.QLineEdit("0.02")
-        form.addRow("滑点（元）：", _field_with_hint(
-            self._slippage_edit,
-            "A 股建议 2.0（绝对金额）；期货填 tick 数 × pricetick"))
+        lf.addRow("滑点（元）：", _field_with_hint(
+            self._slippage_edit, "A 股建议 2.0；期货填 tick 数 × pricetick"))
 
         self._size_edit = QtWidgets.QLineEdit("1.0")
-        form.addRow("合约乘数：", _field_with_hint(
-            self._size_edit, "A 股填 100（1 手 = 100 股）；期货填合约乘数"))
+        lf.addRow("合约乘数：", _field_with_hint(
+            self._size_edit, "A 股填 100（1 手=100 股）；期货填合约乘数"))
 
         self._pricetick_edit = QtWidgets.QLineEdit("0.01")
-        form.addRow("最小变动价位：", _field_with_hint(
+        lf.addRow("最小变动价位：", _field_with_hint(
             self._pricetick_edit, "A 股填 0.01；沪深 ETF 填 0.001"))
 
         self._param_table = _ParamTable()
-        self._param_table.setFixedHeight(160)
-        form.addRow("策略参数：", _field_with_hint(
-            self._param_table,
-            "双击右列单元格直接修改参数值；切换策略时自动填入默认值"))
+        self._param_table.setMinimumHeight(80)
+        self._param_table.setMaximumHeight(150)
+        lf.addRow("策略参数：", _field_with_hint(
+            self._param_table, "双击右列修改参数；切换策略自动填入默认値"))
 
-        self._pool_edit = QtWidgets.QPlainTextEdit()
-        self._pool_edit.setFixedHeight(100)
-        form.addRow("股票池：", _field_with_hint(
-            self._pool_edit,
-            "每行一个 vt_symbol，或逗号分隔。示例：600519.SSE"))
+        left_w = QtWidgets.QWidget()
+        left_w.setLayout(lf)
+        # ---- right column: stock pool + run options --------------
+        rf = _form()
 
-        mp_layout = QtWidgets.QHBoxLayout()
+        # stock pool row: label showing current pool + manage button
+        pool_row = QtWidgets.QHBoxLayout()
+        self._pool_name_label = QtWidgets.QLabel("未选择股票池")
+        self._pool_name_label.setStyleSheet(
+            "color:#4FC3F7; font-size:13px; font-weight:bold;"
+        )
+        self._pool_count_label = QtWidgets.QLabel("")
+        self._pool_count_label.setStyleSheet("color:#888; font-size:11px;")
+        btn_manage = QtWidgets.QPushButton("管理...")
+        btn_manage.setFixedWidth(72)
+        btn_manage.setToolTip("打开股票池管理器（新建 / 编辑 / 导入）")
+        btn_manage.clicked.connect(self._on_manage_pool)
+        pool_row.addWidget(self._pool_name_label, 1)
+        pool_row.addWidget(self._pool_count_label)
+        pool_row.addWidget(btn_manage)
+
+        pool_w = QtWidgets.QWidget()
+        pool_vbox = QtWidgets.QVBoxLayout(pool_w)
+        pool_vbox.setContentsMargins(0, 0, 0, 0)
+        pool_vbox.setSpacing(2)
+        pool_vbox.addLayout(pool_row)
+        pool_vbox.addWidget(_hint(
+            "点击「管理」新建或选择股票池，确定后自动应用到回测"
+        ))
+        rf.addRow("股票池：", pool_w)
+
+        # multiprocess
+        mp_row = QtWidgets.QHBoxLayout()
         self._mp_check = QtWidgets.QCheckBox("启用多进程")
         self._workers_spin = QtWidgets.QSpinBox()
         self._workers_spin.setRange(1, 64)
         self._workers_spin.setValue(4)
         self._workers_spin.setEnabled(False)
         self._mp_check.toggled.connect(self._workers_spin.setEnabled)
-        mp_layout.addWidget(self._mp_check)
-        mp_layout.addWidget(QtWidgets.QLabel("进程数："))
-        mp_layout.addWidget(self._workers_spin)
-        mp_layout.addStretch()
-
-        mp_container = QtWidgets.QWidget()
-        mp_vbox = QtWidgets.QVBoxLayout(mp_container)
+        mp_row.addWidget(self._mp_check)
+        mp_row.addWidget(QtWidgets.QLabel("进程数："))
+        mp_row.addWidget(self._workers_spin)
+        mp_row.addStretch()
+        mp_w = QtWidgets.QWidget()
+        mp_vbox = QtWidgets.QVBoxLayout(mp_w)
         mp_vbox.setContentsMargins(0, 0, 0, 0)
         mp_vbox.setSpacing(2)
-        mp_vbox.addLayout(mp_layout)
+        mp_vbox.addLayout(mp_row)
         mp_vbox.addWidget(_hint("≤ 50 只时串行更快；≥ 200 只时多进程明显提速"))
-        form.addRow("并行：", mp_container)
+        rf.addRow("并行：", mp_w)
 
         self._tushare_token_edit = QtWidgets.QLineEdit()
         self._tushare_token_edit.setPlaceholderText("填入后自动获取股票名称和行业")
         self._tushare_token_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
-        form.addRow("Tushare Token：", _field_with_hint(
+        rf.addRow("Tushare Token：", _field_with_hint(
             self._tushare_token_edit,
-            "可选。填入后回测结果自动显示股票名称和行业。"
-            "免费 Token：https://tushare.pro/register"))
+            "可选。填入后自动显示股票名称/行业。"
+            "https://tushare.pro/register",
+        ))
+
+        right_w = QtWidgets.QWidget()
+        right_w.setLayout(rf)
+
+        # ---- assemble -----------------------------------------
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        splitter.addWidget(left_w)
+        splitter.addWidget(right_w)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
+        splitter.setHandleWidth(6)
 
         btn_box = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.StandardButton.Ok
@@ -204,16 +271,16 @@ class SettingDialog(QtWidgets.QDialog):
         btn_box.accepted.connect(self._on_accept)
         btn_box.rejected.connect(self.reject)
 
-        vbox = QtWidgets.QVBoxLayout()
-        vbox.addLayout(form)
-        vbox.addWidget(btn_box)
-        self.setLayout(vbox)
-
+        root = QtWidgets.QVBoxLayout()
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
+        root.addWidget(splitter, 1)
+        root.addWidget(btn_box)
+        self.setLayout(root)
     def _populate_strategy_combo(self) -> None:
         self._strategy_map: dict[str, type] = {}
         try:
-            import importlib
-            import pkgutil
+            import importlib, pkgutil
             from vnpy_ctastrategy.template import CtaTemplate
             import vnpy_ctastrategy.strategies as strat_pkg
             for _f, modname, _p in pkgutil.iter_modules(strat_pkg.__path__):
@@ -236,13 +303,34 @@ class SettingDialog(QtWidgets.QDialog):
             self._strategy_combo.addItem("（未找到策略类）")
 
     def _on_strategy_changed(self, name: str) -> None:
-        """切换策略时用该策略的默认参数填充表格。"""
         cls = self._strategy_map.get(name)
         if not cls:
             self._param_table.setRowCount(0)
             return
         self._param_table.load_params(cls)
 
+    # ---- stock pool management --------------------------------
+
+    def _on_manage_pool(self) -> None:
+        """Open StockPoolDialog; apply the chosen pool on accept."""
+        dlg = StockPoolDialog(
+            manager=self.pool_manager,
+            initial_name=self.pool_manager.current_name,
+            parent=self,
+        )
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            self._update_pool_display()
+
+    def _update_pool_display(self) -> None:
+        """Refresh the pool name label and count hint."""
+        name = self.pool_manager.current_name
+        if name:
+            n = len(self.pool_manager.get_current_symbols())
+            self._pool_name_label.setText(name)
+            self._pool_count_label.setText(f"  共 {n} 只")
+        else:
+            self._pool_name_label.setText("未选择股票池")
+            self._pool_count_label.setText("")
     # ------------------------------------------------------------------ #
     #  Config persistence
     # ------------------------------------------------------------------ #
@@ -284,26 +372,34 @@ class SettingDialog(QtWidgets.QDialog):
         if setting := data.get("strategy_setting", {}):
             self._param_table.set_from_dict(setting)
 
-        if symbols := data.get("symbols", []):
-            self._pool_edit.setPlainText("\n".join(symbols))
+        # restore selected pool
+        pool_name = data.get("current_pool_name", "")
+        if pool_name and self.pool_manager.exists(pool_name):
+            self.pool_manager.set_current(pool_name)
+        elif not pool_name:
+            # legacy: migrate old "symbols" list -> create a one-off pool
+            symbols = data.get("symbols", [])
+            if symbols:
+                legacy_name = "上次回测股票池"
+                if not self.pool_manager.exists(legacy_name):
+                    self.pool_manager.create_pool(legacy_name, symbols)
+                self.pool_manager.set_current(legacy_name)
+        self._update_pool_display()
 
         if data.get("use_multiprocess"):
             self._mp_check.setChecked(True)
         self._workers_spin.setValue(int(data.get("max_workers", 4)))
 
-        # Tushare token: 从 vt_setting.json 读取
-        import json as _j2
-        from pathlib import Path as _P2
-        vt_cfg = _P2.home() / ".vnpy" / "vt_setting.json"
+        # Tushare token from vt_setting.json
+        vt_cfg = _Path.home() / ".vnpy" / "vt_setting.json"
         if vt_cfg.exists():
             try:
-                vt_data = _j2.loads(vt_cfg.read_text(encoding="utf-8"))
-                self._tushare_token_edit.setText(vt_data.get("tushare_token", ""))
+                vt = json.loads(vt_cfg.read_text(encoding="utf-8"))
+                self._tushare_token_edit.setText(vt.get("tushare_token", ""))
             except Exception:
                 pass
 
     def _save_config(self) -> None:
-        import json as _json
         qs = self._start_edit.date()
         qe = self._end_edit.date()
         data = {
@@ -316,64 +412,46 @@ class SettingDialog(QtWidgets.QDialog):
             "size":             self._size_edit.text().strip(),
             "pricetick":        self._pricetick_edit.text().strip(),
             "strategy_setting": self._param_table.get_setting(),
-            "symbols":          self._parse_symbols(),
+            "current_pool_name": self.pool_manager.current_name,
             "use_multiprocess": self._mp_check.isChecked(),
             "max_workers":      self._workers_spin.value(),
         }
-        # 同步写入 vt_setting.json，供 TushareNameProvider.from_settings() 读取
-        token = self._tushare_token_edit.text().strip()
-        from pathlib import Path as _P3
-        vt_cfg = _P3.home() / ".vnpy" / "vt_setting.json"
+        # sync tushare token to vt_setting.json
+        token   = self._tushare_token_edit.text().strip()
+        vt_cfg  = _Path.home() / ".vnpy" / "vt_setting.json"
         try:
-            import json as _j3
-            vt_data: dict = {}
+            vt: dict = {}
             if vt_cfg.exists():
-                vt_data = _j3.loads(vt_cfg.read_text(encoding="utf-8"))
+                vt = json.loads(vt_cfg.read_text(encoding="utf-8"))
             if token:
-                vt_data["tushare_token"] = token
-            elif "tushare_token" in vt_data:
-                del vt_data["tushare_token"]
+                vt["tushare_token"] = token
+            elif "tushare_token" in vt:
+                del vt["tushare_token"]
             vt_cfg.parent.mkdir(parents=True, exist_ok=True)
             vt_cfg.write_text(
-                _j3.dumps(vt_data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
+                json.dumps(vt, ensure_ascii=False, indent=2), encoding="utf-8"
             )
         except Exception:
             pass
         try:
             _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
             _CONFIG_PATH.write_text(
-                _json.dumps(data, ensure_ascii=False, indent=2),
-                encoding="utf-8")
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
         except Exception:
             pass
-
     # ------------------------------------------------------------------ #
-    #  Helpers
-    # ------------------------------------------------------------------ #
-
-    def _parse_symbols(self) -> list:
-        raw = self._pool_edit.toPlainText()
-        return [s.strip()
-                for s in raw.replace(",", "\n").splitlines()
-                if s.strip()]
-
-    # ------------------------------------------------------------------ #
-    #  Validation & accept
+    #  Helpers / Validation
     # ------------------------------------------------------------------ #
 
-    def _on_accept(self) -> None:
-        errors = self._validate()
-        if errors:
-            QtWidgets.QMessageBox.warning(self, "参数错误", "\n".join(errors))
-            return
-        self._save_config()
-        self.accept()
+    def _parse_symbols(self) -> list[str]:
+        """Return vt_symbol list from the current pool manager."""
+        return self.pool_manager.get_current_symbols()
 
-    def _validate(self) -> list:
-        errors = []
+    def _validate(self) -> list[str]:
+        errors: list[str] = []
         if not self._parse_symbols():
-            errors.append("股票池不能为空")
+            errors.append("股票池不能为空，请先点击「管理」选择或创建股票池")
         qs = self._start_edit.date()
         qe = self._end_edit.date()
         if (qs.year(), qs.month(), qs.day()) >= (qe.year(), qe.month(), qe.day()):
@@ -390,12 +468,21 @@ class SettingDialog(QtWidgets.QDialog):
                 errors.append(f"{label}格式错误")
         return errors
 
+    def _on_accept(self) -> None:
+        errors = self._validate()
+        if errors:
+            QtWidgets.QMessageBox.warning(self, "参数错误", "\n".join(errors))
+            return
+        self._save_config()
+        self.accept()
+
     # ------------------------------------------------------------------ #
     #  Public API
     # ------------------------------------------------------------------ #
 
     def get_config(self) -> dict:
-        name = self._strategy_combo.currentText()
+        """Return the full backtest configuration dict."""
+        name           = self._strategy_combo.currentText()
         strategy_class = self._strategy_map.get(name)
         qs = self._start_edit.date()
         qe = self._end_edit.date()
@@ -417,10 +504,11 @@ class SettingDialog(QtWidgets.QDialog):
         }
 
     def set_config(self, cfg: dict) -> None:
+        """Apply an external config dict to the dialog widgets."""
         params = cfg.get("parameters", {})
         if sc := params.get("strategy_class"):
             name = sc.__name__ if isinstance(sc, type) else str(sc)
-            idx = self._strategy_combo.findText(name)
+            idx  = self._strategy_combo.findText(name)
             if idx >= 0:
                 self._strategy_combo.setCurrentIndex(idx)
         if d := params.get("start"):
@@ -439,8 +527,14 @@ class SettingDialog(QtWidgets.QDialog):
                 widget.setText(str(v))
         if setting := params.get("strategy_setting", {}):
             self._param_table.set_from_dict(setting)
+        # symbols: create/overwrite a temp pool and select it
         if symbols := cfg.get("symbols", []):
-            self._pool_edit.setPlainText("\n".join(symbols))
+            tmp_name = "_set_config_temp"
+            self.pool_manager.import_from_text(
+                tmp_name, "\n".join(symbols), overwrite=True
+            )
+            self.pool_manager.set_current(tmp_name)
+            self._update_pool_display()
         if cfg.get("use_multiprocess"):
             self._mp_check.setChecked(True)
         if w := cfg.get("max_workers"):

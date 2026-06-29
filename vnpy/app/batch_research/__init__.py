@@ -11,7 +11,14 @@
 """
 
 from .app import BatchResearchApp
+from .manager import StockPoolManager, ImportResult, get_default_pool_defs
 
 APP_NAME = "BatchResearch"
 
-__all__ = ["BatchResearchApp", "APP_NAME"]
+__all__ = [
+    "BatchResearchApp",
+    "APP_NAME",
+    "StockPoolManager",
+    "ImportResult",
+    "get_default_pool_defs",
+]
