@@ -35,6 +35,7 @@ from vnpy.factor_research import FactorResearchApp
 from vnpy.portfolio_engine import PortfolioEngineApp
 from vnpy.execution_engine import ExecutionEngineApp
 from vnpy.risk_engine_2 import RiskEngine2App
+from vnpy.research_validation import ResearchValidationApp
 # from vnpy_datarecorder import DataRecorderApp
 # from vnpy_riskmanager import RiskManagerApp
 # from vnpy_webtrader import WebTraderApp
@@ -82,6 +83,7 @@ def main():
     main_engine.add_app(PortfolioEngineApp)
     main_engine.add_app(ExecutionEngineApp)
     main_engine.add_app(RiskEngine2App)
+    main_engine.add_app(ResearchValidationApp)
     # main_engine.add_app(DataRecorderApp)
     # main_engine.add_app(RiskManagerApp)
     # main_engine.add_app(WebTraderApp)
