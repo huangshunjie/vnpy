@@ -32,6 +32,7 @@ from vnpy_datamanager import DataManagerApp
 from vnpy.app.batch_research import BatchResearchApp
 import vnpy.app.batch_research.patch_datamanager  # noqa: F401
 from vnpy.factor_research import FactorResearchApp
+from vnpy.portfolio_engine import PortfolioEngineApp
 # from vnpy_datarecorder import DataRecorderApp
 # from vnpy_riskmanager import RiskManagerApp
 # from vnpy_webtrader import WebTraderApp
@@ -76,6 +77,7 @@ def main():
     main_engine.add_app(DataManagerApp)
     main_engine.add_app(BatchResearchApp)
     main_engine.add_app(FactorResearchApp)
+    main_engine.add_app(PortfolioEngineApp)
     # main_engine.add_app(DataRecorderApp)
     # main_engine.add_app(RiskManagerApp)
     # main_engine.add_app(WebTraderApp)
