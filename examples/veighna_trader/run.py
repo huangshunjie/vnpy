@@ -38,6 +38,7 @@ from vnpy.risk_engine_2 import RiskEngine2App
 from vnpy.research_validation import ResearchValidationApp
 from vnpy.quant_os import QuantOSApp
 from vnpy.live_production import LiveProductionApp
+from vnpy.alpha_factory_2 import AlphaFactory2App
 # from vnpy_datarecorder import DataRecorderApp
 # from vnpy_riskmanager import RiskManagerApp
 # from vnpy_webtrader import WebTraderApp
@@ -88,6 +89,7 @@ def main():
     main_engine.add_app(ResearchValidationApp)
     main_engine.add_app(QuantOSApp)
     main_engine.add_app(LiveProductionApp)
+    main_engine.add_app(AlphaFactory2App)
     # main_engine.add_app(DataRecorderApp)
     # main_engine.add_app(RiskManagerApp)
     # main_engine.add_app(WebTraderApp)
