@@ -11,7 +11,7 @@ from .dispatcher import AlphaFactoryEngine
 
 class AlphaFactory2App(BaseApp):
     app_name     = APP_NAME
-    app_module   = __module__
+    app_module   = "vnpy.alpha_factory_2"
     app_path     = APP_PATH
     display_name = "Alpha Factory 2.0  工业化Alpha生产系统"
     engine_class = AlphaFactoryEngine

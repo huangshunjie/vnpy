@@ -11,7 +11,7 @@ from .dispatcher import LiveProductionEngine
 
 class LiveProductionApp(BaseApp):
     app_name    = APP_NAME
-    app_module  = __module__
+    app_module  = "vnpy.live_production"
     app_path    = APP_PATH
     display_name = "实盘生产系统  Live Production"
     engine_class = LiveProductionEngine
