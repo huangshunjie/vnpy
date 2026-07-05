@@ -43,6 +43,7 @@ from vnpy.capital_allocation_ai import CapitalAllocationApp
 from vnpy.market_regime_ai import MarketRegimeApp
 from vnpy.strategy_lifecycle_ai import StrategyLifecycleApp
 from vnpy.execution_intelligence_ai import ExecutionIntelligenceApp
+from vnpy.global_portfolio_intelligence import GlobalPortfolioIntelligenceApp
 # from vnpy_datarecorder import DataRecorderApp
 # from vnpy_riskmanager import RiskManagerApp
 # from vnpy_webtrader import WebTraderApp
@@ -98,6 +99,7 @@ def main():
     main_engine.add_app(MarketRegimeApp)
     main_engine.add_app(StrategyLifecycleApp)
     main_engine.add_app(ExecutionIntelligenceApp)
+    main_engine.add_app(GlobalPortfolioIntelligenceApp)
     # main_engine.add_app(DataRecorderApp)
     # main_engine.add_app(RiskManagerApp)
     # main_engine.add_app(WebTraderApp)
