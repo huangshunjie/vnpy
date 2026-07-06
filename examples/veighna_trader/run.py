@@ -46,6 +46,10 @@ from vnpy.execution_intelligence_ai import ExecutionIntelligenceApp
 from vnpy.global_portfolio_intelligence import GlobalPortfolioIntelligenceApp
 from vnpy.adaptive_learning_ai import AdaptiveLearningApp
 from vnpy.data_intelligence_ai import DataIntelligenceApp
+from vnpy.system_integration_bus import SystemIntegrationBusApp
+from vnpy.performance_monitor import PerformanceMonitorApp
+from vnpy.backtest_bridge import BacktestBridgeApp
+from vnpy.system_console import SystemConsoleApp
 # from vnpy_datarecorder import DataRecorderApp
 # from vnpy_riskmanager import RiskManagerApp
 # from vnpy_webtrader import WebTraderApp
@@ -104,6 +108,10 @@ def main():
     main_engine.add_app(GlobalPortfolioIntelligenceApp)
     main_engine.add_app(AdaptiveLearningApp)
     main_engine.add_app(DataIntelligenceApp)
+    main_engine.add_app(SystemIntegrationBusApp)
+    main_engine.add_app(PerformanceMonitorApp)
+    main_engine.add_app(BacktestBridgeApp)
+    main_engine.add_app(SystemConsoleApp)
     # main_engine.add_app(DataRecorderApp)
     # main_engine.add_app(RiskManagerApp)
     # main_engine.add_app(WebTraderApp)

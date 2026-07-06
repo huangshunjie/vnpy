@@ -1,0 +1,31 @@
+"""
+system_integration_bus/__init__.py
+"""
+from .app    import SystemIntegrationBusApp
+from .engine import SystemBusEngine
+from .constant import (
+    APP_NAME, BusChannel, PipelineStage, MessagePriority,
+    BusStatus, HealthStatus,
+)
+from .event import (
+    EVENT_BUS_STARTED, EVENT_BUS_STOPPED, EVENT_BUS_DEGRADED,
+    EVENT_STAGE_INGEST, EVENT_STAGE_SIGNAL, EVENT_STAGE_ALLOCATE,
+    EVENT_STAGE_EXECUTE, EVENT_STAGE_LEARN,
+    EVENT_BUS_MESSAGE, EVENT_ENGINE_HEALTH, EVENT_ENGINE_OFFLINE,
+    EVENT_ENGINE_RECOVERED, EVENT_PIPELINE_CYCLE, EVENT_PIPELINE_ERROR,
+    EVENT_SIGNAL_FORWARDED, EVENT_RISK_GATE, EVENT_REGIME_BROADCAST,
+)
+
+__all__ = [
+    "SystemIntegrationBusApp",
+    "SystemBusEngine",
+    "APP_NAME",
+    "BusChannel", "PipelineStage", "MessagePriority",
+    "BusStatus", "HealthStatus",
+    "EVENT_BUS_STARTED", "EVENT_BUS_STOPPED", "EVENT_BUS_DEGRADED",
+    "EVENT_STAGE_INGEST", "EVENT_STAGE_SIGNAL", "EVENT_STAGE_ALLOCATE",
+    "EVENT_STAGE_EXECUTE", "EVENT_STAGE_LEARN",
+    "EVENT_BUS_MESSAGE", "EVENT_ENGINE_HEALTH", "EVENT_ENGINE_OFFLINE",
+    "EVENT_ENGINE_RECOVERED", "EVENT_PIPELINE_CYCLE", "EVENT_PIPELINE_ERROR",
+    "EVENT_SIGNAL_FORWARDED", "EVENT_RISK_GATE", "EVENT_REGIME_BROADCAST",
+]
