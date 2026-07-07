@@ -182,6 +182,10 @@ class ExperimentEngine:
             run.artifacts.append(artifact)
             self._run_repo.save(run)
 
+    def update_run(self, run: RunRecord) -> None:
+        run.updated_at = datetime.now() if hasattr(run, 'updated_at') else None
+        self._run_repo.save(run)
+
     def get_run(self, run_id: str) -> Optional[RunRecord]:
         return self._run_repo.get(run_id)
 

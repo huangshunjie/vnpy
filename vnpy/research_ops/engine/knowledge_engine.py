@@ -224,9 +224,13 @@ class KnowledgeEngine:
         }
 
     def stats(self) -> dict:
+        notes = self._note_repo.list()
         return {
-            "notes":          self._note_repo.count(),
+            "notes":           self._note_repo.count(),
+            "archived_notes":  sum(1 for n in notes if getattr(n, "is_archived", False)),
             "experience_cards": self._card_repo.count(),
-            "failure_cases":  self._case_repo.count(),
+            "cards":           self._card_repo.count(),
+            "failure_cases":   self._case_repo.count(),
             "unresolved_cases": len(self.list_failure_cases(resolved=False)),
+            "open_cases":      len(self.list_failure_cases(resolved=False)),
         }

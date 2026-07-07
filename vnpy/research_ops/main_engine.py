@@ -178,6 +178,9 @@ class ResearchOpsEngine(BaseEngine):
     def log_params(self, run_id: str, params: Dict) -> None:
         self.experiment.log_params(run_id, params)
 
+    def update_run(self, run) -> None:
+        self.experiment.update_run(run)
+
     def get_run(self, run_id: str) -> Optional[RunRecord]:
         return self.experiment.get_run(run_id)
 
@@ -493,6 +496,36 @@ class ResearchOpsEngine(BaseEngine):
     def log_audit(self, actor: str, action: AuditAction, **kw) -> AuditLog:
         return self.governance.log_action(actor, action, **kw)
 
+
+    # ==================================================================
+    # Per-subsystem stats() — called by each Tab's _refresh_stats()
+    # ==================================================================
+
+    def stats(self) -> dict:
+        """默认 stats：返回 experiment 子引擎统计（ExperimentTab 使用）。"""
+        return self.experiment.stats()
+
+    def workspace_stats(self) -> dict:
+        return self.workspace.stats()
+
+    def experiment_stats(self) -> dict:
+        return self.experiment.stats()
+
+    def registry_stats(self) -> dict:
+        return self.registry.stats()
+
+    def pipeline_stats(self) -> dict:
+        return self.pipeline.stats()
+
+    def report_stats(self) -> dict:
+        return self.report.stats()
+
+    def knowledge_stats(self) -> dict:
+        return self.knowledge.stats()
+
+    def governance_stats(self) -> dict:
+        return self.governance.stats()
+
     # ==================================================================
     # 全平台统计
     # ==================================================================
@@ -515,4 +548,113 @@ class ResearchOpsEngine(BaseEngine):
     def close(self) -> None:
         pass
 
+    # ==================================================================
+    # 补充代理 — Knowledge
+    # ==================================================================
+
+    def archive_note(self, note_id: str) -> None:
+        self.knowledge.archive_note(note_id)
+
+    def create_card(self, title: str, **kw):
+        return self.knowledge.create_card(title, **kw)
+
+    def get_card(self, card_id: str):
+        return self.knowledge.get_card(card_id)
+
+    def list_cards(self, **kw):
+        return self.knowledge.list_cards(**kw)
+
+    def update_card(self, card) -> None:
+        self.knowledge.update_card(card)
+
+    def delete_card(self, card_id: str) -> None:
+        self.knowledge.delete_card(card_id)
+
+    def get_failure_case(self, case_id: str):
+        return self.knowledge.get_failure_case(case_id)
+
+    def update_failure_case(self, case) -> None:
+        self.knowledge.update_failure_case(case)
+
+    def delete_failure_case(self, case_id: str) -> None:
+        self.knowledge.delete_failure_case(case_id)
+
+    def resolve_case(self, case_id: str, **kw) -> None:
+        self.knowledge.resolve_case(case_id, **kw)
+
+    def search_all(self, keyword: str) -> dict:
+        return self.knowledge.search_all(keyword)
+
+    # ==================================================================
+    # 补充代理 — Governance
+    # ==================================================================
+
+    def get_request(self, request_id: str):
+        return self.governance.get_request(request_id)
+
+    def list_requests(self, **kw):
+        return self.governance.list_requests(**kw)
+
+    def submit_request(self, title: str, **kw):
+        return self.governance.submit_request(title, **kw)
+
+    def list_freezes(self, **kw):
+        return self.governance.list_freezes(**kw)
+
+    # ==================================================================
+    # 补充代理 — Pipeline
+    # ==================================================================
+
+    def add_node(self, pipeline_id: str, name: str, **kw):
+        return self.pipeline.add_node(pipeline_id, name, **kw)
+
+    def pause_pipeline(self, pipeline_id: str) -> None:
+        self.pipeline.pause_pipeline(pipeline_id)
+
+    # ==================================================================
+    # 补充代理 — Report
+    # ==================================================================
+
+    def add_section(self, report_id: str, title: str, **kw):
+        return self.report.add_section(report_id, title, **kw)
+
+    def remove_section(self, report_id: str, section_id: str) -> None:
+        self.report.remove_section(report_id, section_id)
+
+    def update_section(self, report_id: str, section) -> None:
+        self.report.update_section(report_id, section)
+
+    def render_markdown(self, report_id: str) -> str:
+        return self.report.render_markdown(report_id)
+
+    def unpublish_report(self, report_id: str) -> None:
+        self.report.unpublish_report(report_id)
+
+    def create_template(self, name: str, **kw):
+        return self.report.create_template(name, **kw)
+
+    def get_template(self, template_id: str):
+        return self.report.get_template(template_id)
+
+    def list_templates(self, **kw):
+        return self.report.list_templates(**kw)
+
+    def apply_template(self, report_id: str, template_id: str) -> None:
+        self.report.apply_template(report_id, template_id)
+
+    # ==================================================================
+    # 补充代理 — Governance 短名别名（Tab 用短名调用）
+    # ==================================================================
+
+    def approve(self, request_id: str, approver: str = "", comment: str = "") -> None:
+        self.governance.approve(request_id, approver, comment)
+
+    def reject(self, request_id: str, approver: str = "", comment: str = "") -> None:
+        self.governance.reject(request_id, approver, comment)
+
+    def freeze(self, **kw):
+        return self.governance.freeze(**kw)
+
+    def unfreeze(self, freeze_id: str, released_by: str = "") -> None:
+        self.governance.unfreeze(freeze_id, released_by)
 

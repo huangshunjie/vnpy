@@ -1094,7 +1094,7 @@ class ExperimentTab(QWidget):
             )
             if run.name != dlg.get_name() and dlg.get_name():
                 run.name = dlg.get_name()
-                self._engine.experiment._run_repo.save(run)
+                self._engine.update_run(run)
             if metrics:
                 for k, v in metrics.items():
                     self._engine.log_metric(run.run_id, k, v)

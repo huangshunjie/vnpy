@@ -383,7 +383,7 @@ class DatasetDetail(QTabWidget):
 
         # Tab3: lineage
         lt = QWidget(); lt_l = QVBoxLayout(lt)
-        self._lineage = LineageTreeWidget(engine)
+        self._lineage = LineageTreeWidget(self._engine)
         lt_l.addWidget(self._lineage)
         self.addTab(lt, "\U0001f9ec  \u8840\u7f18")
 
@@ -671,7 +671,7 @@ class FeatureDetail(QTabWidget):
         self.addTab(ht, "\U0001f4c8  IC \u5386\u53f2")
 
         lt = QWidget(); lt_l = QVBoxLayout(lt)
-        self._lineage = LineageTreeWidget(engine)
+        self._lineage = LineageTreeWidget(self._engine)
         lt_l.addWidget(self._lineage)
         self.addTab(lt, "\U0001f9ec  \u8840\u7f18")
 
@@ -932,7 +932,7 @@ class StrategyDetail(QTabWidget):
         self.addTab(vt, "\U0001f4dc  \u7248\u672c")
 
         lt = QWidget(); lt_l = QVBoxLayout(lt)
-        self._lineage = LineageTreeWidget(engine)
+        self._lineage = LineageTreeWidget(self._engine)
         lt_l.addWidget(self._lineage)
         self.addTab(lt, "\U0001f9ec  \u8840\u7f18")
 
@@ -1206,7 +1206,7 @@ class ModelDetail(QTabWidget):
         self.addTab(tt, "\U0001f3cb  \u8bad\u7ec3\u5386\u53f2")
 
         lt = QWidget(); lt_l = QVBoxLayout(lt)
-        self._lineage = LineageTreeWidget(engine)
+        self._lineage = LineageTreeWidget(self._engine)
         lt_l.addWidget(self._lineage)
         self.addTab(lt, "\U0001f9ec  \u8840\u7f18")
 

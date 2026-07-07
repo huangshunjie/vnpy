@@ -220,7 +220,8 @@ class ReportEngine:
     def stats(self) -> dict:
         rpts = self._rpt_repo.list()
         return {
-            "reports":    len(rpts),
-            "published":  sum(1 for r in rpts if r.is_published),
-            "templates":  self._tmpl_repo.count(),
+            "reports":   len(rpts),
+            "published": sum(1 for r in rpts if r.is_published),
+            "drafts":    sum(1 for r in rpts if not r.is_published),
+            "templates": self._tmpl_repo.count(),
         }

@@ -53,6 +53,8 @@ from vnpy.system_console import SystemConsoleApp
 from vnpy.market_reality_ai import MarketRealityApp
 from vnpy.quant_research import QuantResearchApp
 from vnpy.temporal_intelligence_ai import TemporalIntelligenceApp
+from vnpy.platform_engineering import PlatformEngineeringApp
+from vnpy.research_ops import ResearchOpsApp
 # from vnpy_datarecorder import DataRecorderApp
 # from vnpy_riskmanager import RiskManagerApp
 # from vnpy_webtrader import WebTraderApp
@@ -118,6 +120,8 @@ def main():
     main_engine.add_app(MarketRealityApp)
     main_engine.add_app(TemporalIntelligenceApp)
     main_engine.add_app(QuantResearchApp)
+    main_engine.add_app(PlatformEngineeringApp)
+    main_engine.add_app(ResearchOpsApp)
     # main_engine.add_app(DataRecorderApp)
     # main_engine.add_app(RiskManagerApp)
     # main_engine.add_app(WebTraderApp)
