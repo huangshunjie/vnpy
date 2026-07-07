@@ -1,0 +1,1425 @@
+"""
+quant_research/engine.py
+
+ResearchEngine — 研究平台主引擎（Phase 2 Experiment Center）。
+"""
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from vnpy.event import EventEngine, Event
+from vnpy.trader.engine import BaseEngine, MainEngine
+
+from .constant import APP_NAME, ExperimentStatus, DatasetStatus, FeatureStatus, StrategyStatus, ModelStatus, BacktestStatus
+from .event import (
+    EVENT_EXPERIMENT_CREATED,
+    EVENT_EXPERIMENT_UPDATED,
+    EVENT_EXPERIMENT_DELETED,
+    EVENT_DATASET_CREATED,
+    EVENT_DATASET_UPDATED,
+    EVENT_DATASET_DELETED,
+    EVENT_FEATURE_CREATED,
+    EVENT_FEATURE_UPDATED,
+    EVENT_FEATURE_DELETED,
+    EVENT_STRATEGY_CREATED,
+    EVENT_STRATEGY_UPDATED,
+    EVENT_STRATEGY_DELETED,
+    EVENT_MODEL_CREATED,
+    EVENT_MODEL_UPDATED,
+    EVENT_MODEL_DELETED,
+    EVENT_BACKTEST_CREATED,
+    EVENT_BACKTEST_UPDATED,
+    EVENT_BACKTEST_DELETED,
+)
+from .model.experiment_model import ExperimentRecord
+from .model.dataset_model import DatasetRecord, DatasetSnapshot
+from .model.feature_model import FeatureRecord, ICRecord
+from .model.strategy_model import StrategyRecord, StrategyVersion
+from .model.model_model import MLModelRecord, TrainingRun
+from .model.backtest_model import BacktestRecord, DailyEquity
+from .model.report_model import ReportRecord, ReportSection
+from .model.pipeline_model import PipelineRecord, PipelineStepRecord, PipelineRun
+from .model.artifact_model import ArtifactRecord
+from .model.workspace_model import WorkspaceRecord, ProjectRecord
+from .registry import (
+    ExperimentRegistry,
+    DatasetRegistry,
+    FeatureRegistry,
+    StrategyRegistry,
+    ModelRegistry,
+    BacktestRegistry,
+    ReportRegistry,
+    PipelineRegistry,
+    ArtifactRegistry,
+    WorkspaceRegistry,
+)
+
+
+class ResearchEngine(BaseEngine):
+    """研究平台主引擎。"""
+
+    engine_name: str = "ResearchEngine"
+
+    def __init__(self, main_engine: MainEngine, event_engine: EventEngine) -> None:
+        super().__init__(main_engine, event_engine, APP_NAME)
+
+        self.experiment_registry = ExperimentRegistry()
+        self.dataset_registry    = DatasetRegistry()
+        self.feature_registry    = FeatureRegistry()
+        self.strategy_registry   = StrategyRegistry()
+        self.model_registry      = ModelRegistry()
+        self.backtest_registry   = BacktestRegistry()
+        self.report_registry     = ReportRegistry()
+        self.pipeline_registry   = PipelineRegistry()
+        self.artifact_registry   = ArtifactRegistry()
+        self.workspace_registry  = WorkspaceRegistry()
+
+        self._exp_counter: Dict[str, int] = {}
+
+    # ------------------------------------------------------------------
+    # BaseEngine interface
+    # ------------------------------------------------------------------
+
+    def init(self) -> None:
+        pass
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+    def close(self) -> None:
+        self.experiment_registry.clear()
+        self.dataset_registry.clear()
+        self.feature_registry.clear()
+        self.strategy_registry.clear()
+        self.model_registry.clear()
+        self.backtest_registry.clear()
+        self.report_registry.clear()
+        self.pipeline_registry.clear()
+        self.artifact_registry.clear()
+        self.workspace_registry.clear()
+
+    # ------------------------------------------------------------------
+    # Experiment Center — Phase 2
+    # ------------------------------------------------------------------
+
+    def _gen_experiment_id(self) -> str:
+        date_str = datetime.now().strftime("%Y%m%d")
+        count = self._exp_counter.get(date_str, 0) + 1
+        self._exp_counter[date_str] = count
+        return f"EXP-{date_str}-{count:03d}"
+
+    def create_experiment(
+        self,
+        name:        str,
+        description: str                  = "",
+        tags:        Optional[List[str]]  = None,
+        params:      Optional[Dict[str, Any]] = None,
+        created_by:  str                  = "",
+        parent_id:   Optional[str]        = None,
+    ) -> ExperimentRecord:
+        now = datetime.now()
+        record = ExperimentRecord(
+            experiment_id = self._gen_experiment_id(),
+            name          = name,
+            description   = description,
+            status        = ExperimentStatus.DRAFT,
+            tags          = tags or [],
+            params        = params or {},
+            created_by    = created_by,
+            parent_id     = parent_id,
+            created_at    = now,
+            updated_at    = now,
+        )
+        self.experiment_registry.create(record)
+        self._put(EVENT_EXPERIMENT_CREATED, record)
+        return record
+
+    def update_experiment(self, record: ExperimentRecord) -> None:
+        record.updated_at = datetime.now()
+        self.experiment_registry.update(record)
+        self._put(EVENT_EXPERIMENT_UPDATED, record)
+
+    def delete_experiment(self, experiment_id: str) -> None:
+        self.experiment_registry.delete(experiment_id)
+        self._put(EVENT_EXPERIMENT_DELETED, experiment_id)
+
+    def get_experiment(self, experiment_id: str) -> Optional[ExperimentRecord]:
+        return self.experiment_registry.get(experiment_id)
+
+    def list_experiments(
+        self,
+        status:  Optional[ExperimentStatus] = None,
+        tag:     Optional[str]              = None,
+        starred: Optional[bool]             = None,
+    ) -> List[ExperimentRecord]:
+        return self.experiment_registry.filter(status=status, tag=tag, starred=starred)
+
+    def search_experiments(self, keyword: str) -> List[ExperimentRecord]:
+        return self.experiment_registry.search(keyword)
+
+    def star_experiment(self, experiment_id: str, starred: bool) -> None:
+        record = self.experiment_registry.get(experiment_id)
+        if record:
+            record.starred    = starred
+            record.updated_at = datetime.now()
+            self.experiment_registry.update(record)
+            self._put(EVENT_EXPERIMENT_UPDATED, record)
+
+    def set_experiment_status(
+        self, experiment_id: str, status: ExperimentStatus
+    ) -> None:
+        record = self.experiment_registry.get(experiment_id)
+        if record:
+            record.status     = status
+            record.updated_at = datetime.now()
+            self.experiment_registry.update(record)
+            self._put(EVENT_EXPERIMENT_UPDATED, record)
+
+    def add_metric(
+        self, experiment_id: str, key: str, value: float
+    ) -> None:
+        record = self.experiment_registry.get(experiment_id)
+        if record:
+            record.metrics[key] = value
+            record.updated_at   = datetime.now()
+            self.experiment_registry.update(record)
+            self._put(EVENT_EXPERIMENT_UPDATED, record)
+
+    def add_note(self, experiment_id: str, note: str) -> None:
+        record = self.experiment_registry.get(experiment_id)
+        if record:
+            record.notes      = note
+            record.updated_at = datetime.now()
+            self.experiment_registry.update(record)
+            self._put(EVENT_EXPERIMENT_UPDATED, record)
+
+    def add_tag(self, experiment_id: str, tag: str) -> None:
+        record = self.experiment_registry.get(experiment_id)
+        if record and tag not in record.tags:
+            record.tags.append(tag)
+            record.updated_at = datetime.now()
+            self.experiment_registry.update(record)
+            self._put(EVENT_EXPERIMENT_UPDATED, record)
+
+    def remove_tag(self, experiment_id: str, tag: str) -> None:
+        record = self.experiment_registry.get(experiment_id)
+        if record and tag in record.tags:
+            record.tags.remove(tag)
+            record.updated_at = datetime.now()
+            self.experiment_registry.update(record)
+            self._put(EVENT_EXPERIMENT_UPDATED, record)
+
+
+    # ------------------------------------------------------------------
+    # Dataset Registry — Phase 3
+    # ------------------------------------------------------------------
+
+    def _gen_dataset_id(self) -> str:
+        from datetime import datetime
+        date_str = datetime.now().strftime("%Y%m%d")
+        count = self._exp_counter.get(f"DS-{date_str}", 0) + 1
+        self._exp_counter[f"DS-{date_str}"] = count
+        return f"DS-{date_str}-{count:03d}"
+
+    def register_dataset(
+        self,
+        name:         str,
+        version:      str                   = "v1.0",
+        description:  str                   = "",
+        source:       str                   = "",
+        symbols:      Optional[List[str]]   = None,
+        start_date:   str                   = "",
+        end_date:     str                   = "",
+        fields:       Optional[List[str]]   = None,
+        row_count:    int                   = 0,
+        size_mb:      float                 = 0.0,
+        tags:         Optional[List[str]]   = None,
+        created_by:   str                   = "",
+    ) -> DatasetRecord:
+        now = datetime.now()
+        record = DatasetRecord(
+            dataset_id  = self._gen_dataset_id(),
+            name        = name,
+            version     = version,
+            description = description,
+            source      = source,
+            symbols     = symbols or [],
+            start_date  = start_date,
+            end_date    = end_date,
+            fields      = fields or [],
+            row_count   = row_count,
+            size_mb     = size_mb,
+            tags        = tags or [],
+            created_by  = created_by,
+            created_at  = now,
+            updated_at  = now,
+        )
+        self.dataset_registry.create(record)
+        self._put(EVENT_DATASET_CREATED, record)
+        return record
+
+    def update_dataset(self, record: DatasetRecord) -> None:
+        record.updated_at = datetime.now()
+        self.dataset_registry.update(record)
+        self._put(EVENT_DATASET_UPDATED, record)
+
+    def delete_dataset(self, dataset_id: str) -> None:
+        self.dataset_registry.delete(dataset_id)
+        self._put(EVENT_DATASET_DELETED, dataset_id)
+
+    def get_dataset(self, dataset_id: str) -> Optional[DatasetRecord]:
+        return self.dataset_registry.get(dataset_id)
+
+    def list_datasets(
+        self,
+        status: Optional[DatasetStatus] = None,
+        source: Optional[str]           = None,
+        tag:    Optional[str]           = None,
+    ) -> List[DatasetRecord]:
+        return self.dataset_registry.filter(status=status, source=source, tag=tag)
+
+    def search_datasets(self, keyword: str) -> List[DatasetRecord]:
+        return self.dataset_registry.search(keyword)
+
+    def take_snapshot(self, dataset_id: str) -> Optional[DatasetSnapshot]:
+        snap = self.dataset_registry.take_snapshot(dataset_id)
+        if snap:
+            record = self.dataset_registry.get(dataset_id)
+            self._put(EVENT_DATASET_UPDATED, record)
+        return snap
+
+    def get_snapshots(self, dataset_id: str) -> List[DatasetSnapshot]:
+        return self.dataset_registry.get_snapshots(dataset_id)
+
+    def add_dependency(self, dataset_id: str, dep_id: str) -> None:
+        self.dataset_registry.add_dependency(dataset_id, dep_id)
+        record = self.dataset_registry.get(dataset_id)
+        if record:
+            self._put(EVENT_DATASET_UPDATED, record)
+
+    def remove_dependency(self, dataset_id: str, dep_id: str) -> None:
+        self.dataset_registry.remove_dependency(dataset_id, dep_id)
+        record = self.dataset_registry.get(dataset_id)
+        if record:
+            self._put(EVENT_DATASET_UPDATED, record)
+
+    def get_lineage(self, dataset_id: str) -> List[str]:
+        return self.dataset_registry.get_lineage(dataset_id)
+
+    def get_dependents(self, dataset_id: str) -> List[str]:
+        return self.dataset_registry.get_dependents(dataset_id)
+
+    def update_quality(
+        self,
+        dataset_id:    str,
+        quality_score: float,
+        metrics:       Optional[Dict[str, float]] = None,
+    ) -> None:
+        self.dataset_registry.update_quality(dataset_id, quality_score, metrics)
+        record = self.dataset_registry.get(dataset_id)
+        if record:
+            self._put(EVENT_DATASET_UPDATED, record)
+
+
+    # ------------------------------------------------------------------
+    # Feature Registry — Phase 4
+    # ------------------------------------------------------------------
+
+    def _gen_feature_id(self) -> str:
+        date_str = datetime.now().strftime("%Y%m%d")
+        key = f"FT-{date_str}"
+        count = self._exp_counter.get(key, 0) + 1
+        self._exp_counter[key] = count
+        return f"FT-{date_str}-{count:03d}"
+
+    def register_feature(
+        self,
+        name:         str,
+        version:      str                  = "v1.0",
+        description:  str                  = "",
+        category:     str                  = "",
+        formula:      str                  = "",
+        author:       str                  = "",
+        tags:         Optional[List[str]]  = None,
+        dependencies: Optional[List[str]]  = None,
+        dataset_ids:  Optional[List[str]]  = None,
+    ) -> FeatureRecord:
+        now = datetime.now()
+        record = FeatureRecord(
+            feature_id   = self._gen_feature_id(),
+            name         = name,
+            version      = version,
+            description  = description,
+            category     = category,
+            formula      = formula,
+            author       = author,
+            tags         = tags or [],
+            dependencies = dependencies or [],
+            dataset_ids  = dataset_ids or [],
+            created_at   = now,
+            updated_at   = now,
+        )
+        self.feature_registry.create(record)
+        self._put(EVENT_FEATURE_CREATED, record)
+        return record
+
+    def update_feature(self, record: FeatureRecord) -> None:
+        record.updated_at = datetime.now()
+        self.feature_registry.update(record)
+        self._put(EVENT_FEATURE_UPDATED, record)
+
+    def delete_feature(self, feature_id: str) -> None:
+        self.feature_registry.delete(feature_id)
+        self._put(EVENT_FEATURE_DELETED, feature_id)
+
+    def get_feature(self, feature_id: str) -> Optional[FeatureRecord]:
+        return self.feature_registry.get(feature_id)
+
+    def list_features(
+        self,
+        status:      Optional[FeatureStatus] = None,
+        category:    Optional[str]           = None,
+        tag:         Optional[str]           = None,
+        author:      Optional[str]           = None,
+        active_only: bool                    = False,
+    ) -> List[FeatureRecord]:
+        return self.feature_registry.filter(
+            status=status, category=category,
+            tag=tag, author=author, active_only=active_only,
+        )
+
+    def search_features(self, keyword: str) -> List[FeatureRecord]:
+        return self.feature_registry.search(keyword)
+
+    def update_ic_metrics(
+        self,
+        feature_id: str,
+        ic:         float,
+        rank_ic:    float,
+        ir:         float,
+        icir:       float        = 0.0,
+        coverage:   float        = 0.0,
+        period:     str          = "",
+        dataset_id: str          = "",
+    ) -> Optional[ICRecord]:
+        eval_rec = self.feature_registry.update_ic_metrics(
+            feature_id, ic, rank_ic, ir, icir, coverage, period, dataset_id
+        )
+        if eval_rec:
+            record = self.feature_registry.get(feature_id)
+            self._put(EVENT_FEATURE_UPDATED, record)
+        return eval_rec
+
+    def get_ic_history(self, feature_id: str) -> List[ICRecord]:
+        return self.feature_registry.get_ic_history(feature_id)
+
+    def deprecate_feature(self, feature_id: str, reason: str = "") -> None:
+        self.feature_registry.deprecate(feature_id, reason)
+        record = self.feature_registry.get(feature_id)
+        if record:
+            self._put(EVENT_FEATURE_UPDATED, record)
+
+    def restore_feature(self, feature_id: str) -> None:
+        self.feature_registry.restore(feature_id)
+        record = self.feature_registry.get(feature_id)
+        if record:
+            self._put(EVENT_FEATURE_UPDATED, record)
+
+    def add_feature_dependency(self, feature_id: str, dep_id: str) -> None:
+        self.feature_registry.add_dependency(feature_id, dep_id)
+        record = self.feature_registry.get(feature_id)
+        if record:
+            self._put(EVENT_FEATURE_UPDATED, record)
+
+    def remove_feature_dependency(self, feature_id: str, dep_id: str) -> None:
+        self.feature_registry.remove_dependency(feature_id, dep_id)
+        record = self.feature_registry.get(feature_id)
+        if record:
+            self._put(EVENT_FEATURE_UPDATED, record)
+
+    def add_feature_dataset(self, feature_id: str, dataset_id: str) -> None:
+        self.feature_registry.add_dataset(feature_id, dataset_id)
+        record = self.feature_registry.get(feature_id)
+        if record:
+            self._put(EVENT_FEATURE_UPDATED, record)
+
+    def get_feature_dependents(self, feature_id: str) -> List[str]:
+        return self.feature_registry.get_dependents(feature_id)
+
+    def top_features_by_ic(self, n: int = 10) -> List[FeatureRecord]:
+        return self.feature_registry.top_by_ic(n)
+
+    def top_features_by_icir(self, n: int = 10) -> List[FeatureRecord]:
+        return self.feature_registry.top_by_icir(n)
+
+
+    # ------------------------------------------------------------------
+    # Strategy Registry — Phase 5
+    # ------------------------------------------------------------------
+
+    def _gen_strategy_id(self) -> str:
+        date_str = datetime.now().strftime("%Y%m%d")
+        key = f"ST-{date_str}"
+        count = self._exp_counter.get(key, 0) + 1
+        self._exp_counter[key] = count
+        return f"ST-{date_str}-{count:03d}"
+
+    def register_strategy(
+        self,
+        name:          str,
+        version:       str                  = "v1.0",
+        description:   str                  = "",
+        strategy_type: str                  = "",
+        author:        str                  = "",
+        code_path:     str                  = "",
+        universe:      str                  = "",
+        params:        Optional[Dict[str, Any]] = None,
+        tags:          Optional[List[str]]  = None,
+        feature_ids:   Optional[List[str]]  = None,
+        dataset_ids:   Optional[List[str]]  = None,
+    ) -> StrategyRecord:
+        now = datetime.now()
+        record = StrategyRecord(
+            strategy_id   = self._gen_strategy_id(),
+            name          = name,
+            version       = version,
+            description   = description,
+            strategy_type = strategy_type,
+            author        = author,
+            code_path     = code_path,
+            universe      = universe,
+            params        = params or {},
+            tags          = tags or [],
+            feature_ids   = feature_ids or [],
+            dataset_ids   = dataset_ids or [],
+            created_at    = now,
+            updated_at    = now,
+        )
+        self.strategy_registry.create(record)
+        self._put(EVENT_STRATEGY_CREATED, record)
+        return record
+
+    def update_strategy(self, record: StrategyRecord) -> None:
+        record.updated_at = datetime.now()
+        self.strategy_registry.update(record)
+        self._put(EVENT_STRATEGY_UPDATED, record)
+
+    def delete_strategy(self, strategy_id: str) -> None:
+        self.strategy_registry.delete(strategy_id)
+        self._put(EVENT_STRATEGY_DELETED, strategy_id)
+
+    def get_strategy(self, strategy_id: str) -> Optional[StrategyRecord]:
+        return self.strategy_registry.get(strategy_id)
+
+    def list_strategies(
+        self,
+        status:        Optional[StrategyStatus] = None,
+        strategy_type: Optional[str]            = None,
+        tag:           Optional[str]            = None,
+        author:        Optional[str]            = None,
+    ) -> List[StrategyRecord]:
+        return self.strategy_registry.filter(
+            status=status, strategy_type=strategy_type, tag=tag, author=author
+        )
+
+    def search_strategies(self, keyword: str) -> List[StrategyRecord]:
+        return self.strategy_registry.search(keyword)
+
+    def update_performance(
+        self,
+        strategy_id:   str,
+        annual_return: float = 0.0,
+        max_drawdown:  float = 0.0,
+        sharpe:        float = 0.0,
+        sortino:       float = 0.0,
+        calmar:        float = 0.0,
+        win_rate:      float = 0.0,
+        turnover:      float = 0.0,
+        profit_factor: float = 0.0,
+    ) -> None:
+        self.strategy_registry.update_performance(
+            strategy_id, annual_return, max_drawdown,
+            sharpe, sortino, calmar, win_rate, turnover, profit_factor,
+        )
+        record = self.strategy_registry.get(strategy_id)
+        if record:
+            self._put(EVENT_STRATEGY_UPDATED, record)
+
+    def publish_strategy(self, strategy_id: str) -> None:
+        self.strategy_registry.publish(strategy_id)
+        record = self.strategy_registry.get(strategy_id)
+        if record:
+            self._put(EVENT_STRATEGY_UPDATED, record)
+
+    def retire_strategy(self, strategy_id: str) -> None:
+        self.strategy_registry.retire(strategy_id)
+        record = self.strategy_registry.get(strategy_id)
+        if record:
+            self._put(EVENT_STRATEGY_UPDATED, record)
+
+    def set_strategy_testing(self, strategy_id: str) -> None:
+        self.strategy_registry.set_testing(strategy_id)
+        record = self.strategy_registry.get(strategy_id)
+        if record:
+            self._put(EVENT_STRATEGY_UPDATED, record)
+
+    def add_strategy_version(
+        self, strategy_id: str, note: str = "", created_by: str = ""
+    ) -> Optional[StrategyVersion]:
+        ver = self.strategy_registry.add_version(strategy_id, note, created_by)
+        if ver:
+            record = self.strategy_registry.get(strategy_id)
+            self._put(EVENT_STRATEGY_UPDATED, record)
+        return ver
+
+    def get_strategy_versions(self, strategy_id: str) -> List[StrategyVersion]:
+        return self.strategy_registry.get_versions(strategy_id)
+
+    def link_strategy_feature(self, strategy_id: str, feature_id: str) -> None:
+        self.strategy_registry.link_feature(strategy_id, feature_id)
+        record = self.strategy_registry.get(strategy_id)
+        if record:
+            self._put(EVENT_STRATEGY_UPDATED, record)
+
+    def unlink_strategy_feature(self, strategy_id: str, feature_id: str) -> None:
+        self.strategy_registry.unlink_feature(strategy_id, feature_id)
+        record = self.strategy_registry.get(strategy_id)
+        if record:
+            self._put(EVENT_STRATEGY_UPDATED, record)
+
+    def link_strategy_backtest(self, strategy_id: str, backtest_id: str) -> None:
+        self.strategy_registry.link_backtest(strategy_id, backtest_id)
+        record = self.strategy_registry.get(strategy_id)
+        if record:
+            self._put(EVENT_STRATEGY_UPDATED, record)
+
+    def top_strategies_by_sharpe(self, n: int = 10) -> List[StrategyRecord]:
+        return self.strategy_registry.top_by_sharpe(n)
+
+    def top_strategies_by_return(self, n: int = 10) -> List[StrategyRecord]:
+        return self.strategy_registry.top_by_return(n)
+
+
+    # ------------------------------------------------------------------
+    # Model Registry — Phase 6
+    # ------------------------------------------------------------------
+
+    def _gen_model_id(self) -> str:
+        date_str = datetime.now().strftime("%Y%m%d")
+        key = f"ML-{date_str}"
+        count = self._exp_counter.get(key, 0) + 1
+        self._exp_counter[key] = count
+        return f"ML-{date_str}-{count:03d}"
+
+    def register_model(
+        self,
+        name:        str,
+        version:     str                   = "v1.0",
+        description: str                   = "",
+        model_type:  str                   = "",
+        author:      str                   = "",
+        model_path:  str                   = "",
+        config_path: str                   = "",
+        framework:   str                   = "",
+        hyperparams: Optional[Dict[str, Any]] = None,
+        tags:        Optional[List[str]]   = None,
+        feature_ids: Optional[List[str]]   = None,
+        dataset_ids: Optional[List[str]]   = None,
+    ) -> MLModelRecord:
+        now = datetime.now()
+        record = MLModelRecord(
+            model_id    = self._gen_model_id(),
+            name        = name,
+            version     = version,
+            description = description,
+            model_type  = model_type,
+            author      = author,
+            model_path  = model_path,
+            config_path = config_path,
+            framework   = framework,
+            hyperparams = hyperparams or {},
+            tags        = tags or [],
+            feature_ids = feature_ids or [],
+            dataset_ids = dataset_ids or [],
+            created_at  = now,
+            updated_at  = now,
+        )
+        self.model_registry.create(record)
+        self._put(EVENT_MODEL_CREATED, record)
+        return record
+
+    def update_model(self, record: MLModelRecord) -> None:
+        record.updated_at = datetime.now()
+        self.model_registry.update(record)
+        self._put(EVENT_MODEL_UPDATED, record)
+
+    def delete_model(self, model_id: str) -> None:
+        self.model_registry.delete(model_id)
+        self._put(EVENT_MODEL_DELETED, model_id)
+
+    def get_model(self, model_id: str) -> Optional[MLModelRecord]:
+        return self.model_registry.get(model_id)
+
+    def list_models(
+        self,
+        status:     Optional[ModelStatus] = None,
+        model_type: Optional[str]         = None,
+        tag:        Optional[str]         = None,
+        author:     Optional[str]         = None,
+    ) -> List[MLModelRecord]:
+        return self.model_registry.filter(
+            status=status, model_type=model_type, tag=tag, author=author
+        )
+
+    def search_models(self, keyword: str) -> List[MLModelRecord]:
+        return self.model_registry.search(keyword)
+
+    def update_eval_metrics(
+        self,
+        model_id:      str,
+        accuracy:      float                       = 0.0,
+        auc:           float                       = 0.0,
+        rmse:          float                       = 0.0,
+        mae:           float                       = 0.0,
+        f1:            float                       = 0.0,
+        custom_metrics: Optional[Dict[str, float]] = None,
+    ) -> None:
+        self.model_registry.update_eval_metrics(
+            model_id, accuracy, auc, rmse, mae, f1, custom_metrics
+        )
+        record = self.model_registry.get(model_id)
+        if record:
+            self._put(EVENT_MODEL_UPDATED, record)
+
+    def add_training_run(
+        self,
+        model_id:     str,
+        run_note:     str                       = "",
+        hyperparams:  Optional[Dict[str, Any]]  = None,
+        metrics:      Optional[Dict[str, float]] = None,
+        dataset_id:   str                       = "",
+        duration_sec: float                     = 0.0,
+        created_by:   str                       = "",
+    ) -> Optional[TrainingRun]:
+        run = self.model_registry.add_training_run(
+            model_id, run_note, hyperparams, metrics,
+            dataset_id, duration_sec, created_by,
+        )
+        if run:
+            record = self.model_registry.get(model_id)
+            self._put(EVENT_MODEL_UPDATED, record)
+        return run
+
+    def get_training_runs(self, model_id: str) -> List[TrainingRun]:
+        return self.model_registry.get_training_runs(model_id)
+
+    def deploy_model(
+        self, model_id: str, env: str = "", endpoint: str = ""
+    ) -> None:
+        self.model_registry.deploy(model_id, env, endpoint)
+        record = self.model_registry.get(model_id)
+        if record:
+            self._put(EVENT_MODEL_UPDATED, record)
+
+    def retire_model(self, model_id: str) -> None:
+        self.model_registry.retire(model_id)
+        record = self.model_registry.get(model_id)
+        if record:
+            self._put(EVENT_MODEL_UPDATED, record)
+
+    def set_model_evaluated(self, model_id: str) -> None:
+        self.model_registry.set_evaluated(model_id)
+        record = self.model_registry.get(model_id)
+        if record:
+            self._put(EVENT_MODEL_UPDATED, record)
+
+    def link_model_feature(self, model_id: str, feature_id: str) -> None:
+        self.model_registry.link_feature(model_id, feature_id)
+        record = self.model_registry.get(model_id)
+        if record:
+            self._put(EVENT_MODEL_UPDATED, record)
+
+    def unlink_model_feature(self, model_id: str, feature_id: str) -> None:
+        self.model_registry.unlink_feature(model_id, feature_id)
+        record = self.model_registry.get(model_id)
+        if record:
+            self._put(EVENT_MODEL_UPDATED, record)
+
+    def link_model_dataset(self, model_id: str, dataset_id: str) -> None:
+        self.model_registry.link_dataset(model_id, dataset_id)
+        record = self.model_registry.get(model_id)
+        if record:
+            self._put(EVENT_MODEL_UPDATED, record)
+
+    def link_model_strategy(self, model_id: str, strategy_id: str) -> None:
+        self.model_registry.link_strategy(model_id, strategy_id)
+        record = self.model_registry.get(model_id)
+        if record:
+            self._put(EVENT_MODEL_UPDATED, record)
+
+    def link_model_experiment(self, model_id: str, experiment_id: str) -> None:
+        self.model_registry.link_experiment(model_id, experiment_id)
+        record = self.model_registry.get(model_id)
+        if record:
+            self._put(EVENT_MODEL_UPDATED, record)
+
+    def top_models_by_auc(self, n: int = 10) -> List[MLModelRecord]:
+        return self.model_registry.top_by_auc(n)
+
+    def top_models_by_accuracy(self, n: int = 10) -> List[MLModelRecord]:
+        return self.model_registry.top_by_accuracy(n)
+
+
+    # ------------------------------------------------------------------
+    # Backtest Registry — Phase 7
+    # ------------------------------------------------------------------
+
+    def _gen_backtest_id(self) -> str:
+        date_str = datetime.now().strftime("%Y%m%d")
+        key = f"BT-{date_str}"
+        count = self._exp_counter.get(key, 0) + 1
+        self._exp_counter[key] = count
+        return f"BT-{date_str}-{count:03d}"
+
+    def submit_backtest(
+        self,
+        name:            str,
+        strategy_id:     str                   = "",
+        strategy_name:   str                   = "",
+        description:     str                   = "",
+        start_date:      str                   = "",
+        end_date:        str                   = "",
+        initial_capital: float                 = 1_000_000.0,
+        commission:      float                 = 0.0003,
+        slippage:        float                 = 0.0,
+        universe:        str                   = "",
+        params:          Optional[Dict[str, Any]] = None,
+        tags:            Optional[List[str]]   = None,
+        feature_ids:     Optional[List[str]]   = None,
+        dataset_ids:     Optional[List[str]]   = None,
+        model_ids:       Optional[List[str]]   = None,
+        created_by:      str                   = "",
+    ) -> BacktestRecord:
+        now = datetime.now()
+        record = BacktestRecord(
+            backtest_id     = self._gen_backtest_id(),
+            name            = name,
+            description     = description,
+            status          = BacktestStatus.PENDING,
+            strategy_id     = strategy_id,
+            strategy_name   = strategy_name,
+            start_date      = start_date,
+            end_date        = end_date,
+            initial_capital = initial_capital,
+            commission      = commission,
+            slippage        = slippage,
+            universe        = universe,
+            params          = params or {},
+            tags            = tags or [],
+            feature_ids     = feature_ids or [],
+            dataset_ids     = dataset_ids or [],
+            model_ids       = model_ids or [],
+            created_by      = created_by,
+            created_at      = now,
+            updated_at      = now,
+        )
+        self.backtest_registry.create(record)
+        self._put(EVENT_BACKTEST_CREATED, record)
+        return record
+
+    def update_backtest(self, record: BacktestRecord) -> None:
+        record.updated_at = datetime.now()
+        self.backtest_registry.update(record)
+        self._put(EVENT_BACKTEST_UPDATED, record)
+
+    def delete_backtest(self, backtest_id: str) -> None:
+        self.backtest_registry.delete(backtest_id)
+        self._put(EVENT_BACKTEST_DELETED, backtest_id)
+
+    def get_backtest(self, backtest_id: str) -> Optional[BacktestRecord]:
+        return self.backtest_registry.get(backtest_id)
+
+    def list_backtests(
+        self,
+        status:      Optional[BacktestStatus] = None,
+        strategy_id: Optional[str]            = None,
+        tag:         Optional[str]            = None,
+    ) -> List[BacktestRecord]:
+        return self.backtest_registry.filter(
+            status=status, strategy_id=strategy_id, tag=tag
+        )
+
+    def search_backtests(self, keyword: str) -> List[BacktestRecord]:
+        return self.backtest_registry.search(keyword)
+
+    def run_backtest(self, backtest_id: str) -> None:
+        self.backtest_registry.submit(backtest_id)
+        record = self.backtest_registry.get(backtest_id)
+        if record:
+            self._put(EVENT_BACKTEST_UPDATED, record)
+
+    def complete_backtest(
+        self,
+        backtest_id:     str,
+        annual_return:   float = 0.0,
+        max_drawdown:    float = 0.0,
+        sharpe:          float = 0.0,
+        sortino:         float = 0.0,
+        calmar:          float = 0.0,
+        win_rate:        float = 0.0,
+        turnover:        float = 0.0,
+        profit_factor:   float = 0.0,
+        total_return:    float = 0.0,
+        alpha:           float = 0.0,
+        beta:            float = 0.0,
+        information_ratio: float = 0.0,
+        total_trades:    int   = 0,
+        avg_holding_days: float = 0.0,
+        max_position_conc: float = 0.0,
+        equity_curve:    Optional[List[DailyEquity]] = None,
+        monthly_returns: Optional[Dict[str, float]]  = None,
+    ) -> None:
+        self.backtest_registry.complete(
+            backtest_id, annual_return, max_drawdown, sharpe,
+            sortino, calmar, win_rate, turnover, profit_factor,
+            total_return, alpha, beta, information_ratio,
+            total_trades, avg_holding_days, max_position_conc,
+            equity_curve, monthly_returns,
+        )
+        record = self.backtest_registry.get(backtest_id)
+        if record:
+            self._put(EVENT_BACKTEST_UPDATED, record)
+
+    def fail_backtest(self, backtest_id: str, error_msg: str = "") -> None:
+        self.backtest_registry.fail(backtest_id, error_msg)
+        record = self.backtest_registry.get(backtest_id)
+        if record:
+            self._put(EVENT_BACKTEST_UPDATED, record)
+
+    def compare_backtests(self, backtest_ids: List[str]) -> List[BacktestRecord]:
+        return self.backtest_registry.compare(backtest_ids)
+
+    def link_backtest_model(self, backtest_id: str, model_id: str) -> None:
+        self.backtest_registry.link_model(backtest_id, model_id)
+        record = self.backtest_registry.get(backtest_id)
+        if record:
+            self._put(EVENT_BACKTEST_UPDATED, record)
+
+    def unlink_backtest_model(self, backtest_id: str, model_id: str) -> None:
+        self.backtest_registry.unlink_model(backtest_id, model_id)
+        record = self.backtest_registry.get(backtest_id)
+        if record:
+            self._put(EVENT_BACKTEST_UPDATED, record)
+
+    def link_backtest_feature(self, backtest_id: str, feature_id: str) -> None:
+        self.backtest_registry.link_feature(backtest_id, feature_id)
+        record = self.backtest_registry.get(backtest_id)
+        if record:
+            self._put(EVENT_BACKTEST_UPDATED, record)
+
+    def link_backtest_dataset(self, backtest_id: str, dataset_id: str) -> None:
+        self.backtest_registry.link_dataset(backtest_id, dataset_id)
+        record = self.backtest_registry.get(backtest_id)
+        if record:
+            self._put(EVENT_BACKTEST_UPDATED, record)
+
+    def top_backtests_by_sharpe(self, n: int = 10) -> List[BacktestRecord]:
+        return self.backtest_registry.top_by_sharpe(n)
+
+    def top_backtests_by_return(self, n: int = 10) -> List[BacktestRecord]:
+        return self.backtest_registry.top_by_return(n)
+
+
+    # ------------------------------------------------------------------
+    # Report Center — Phase 9
+    # ------------------------------------------------------------------
+
+    def _gen_report_id(self) -> str:
+        date_str = datetime.now().strftime("%Y%m%d")
+        key = f"RPT-{date_str}"
+        count = self._exp_counter.get(key, 0) + 1
+        self._exp_counter[key] = count
+        return f"RPT-{date_str}-{count:03d}"
+
+    def create_report(
+        self,
+        title:        str,
+        report_type:  str                  = "research",
+        description:  str                  = "",
+        author:       str                  = "",
+        summary:      str                  = "",
+        experiment_id: Optional[str]       = None,
+        strategy_id:  Optional[str]        = None,
+        backtest_id:  Optional[str]        = None,
+        feature_ids:  Optional[List[str]]  = None,
+        model_ids:    Optional[List[str]]  = None,
+        output_path:  str                  = "",
+        tags:         Optional[List[str]]  = None,
+    ) -> ReportRecord:
+        now = datetime.now()
+        record = ReportRecord(
+            report_id     = self._gen_report_id(),
+            title         = title,
+            report_type   = report_type,
+            description   = description,
+            author        = author,
+            summary       = summary,
+            experiment_id = experiment_id,
+            strategy_id   = strategy_id,
+            backtest_id   = backtest_id,
+            feature_ids   = feature_ids or [],
+            model_ids     = model_ids or [],
+            output_path   = output_path,
+            tags          = tags or [],
+            created_by    = author,
+            created_at    = now,
+            updated_at    = now,
+        )
+        self.report_registry.create(record)
+        self._put(EVENT_REPORT_CREATED, record)
+        return record
+
+    def update_report(self, record: ReportRecord) -> None:
+        record.updated_at = datetime.now()
+        self.report_registry.update(record)
+        self._put(EVENT_REPORT_UPDATED, record)
+
+    def delete_report(self, report_id: str) -> None:
+        self.report_registry.delete(report_id)
+
+    def get_report(self, report_id: str) -> Optional[ReportRecord]:
+        return self.report_registry.get(report_id)
+
+    def list_reports(
+        self,
+        report_type:   Optional[str]  = None,
+        author:        Optional[str]  = None,
+        tag:           Optional[str]  = None,
+        published:     Optional[bool] = None,
+    ) -> List[ReportRecord]:
+        return self.report_registry.filter(
+            report_type=report_type, author=author,
+            tag=tag, published=published,
+        )
+
+    def search_reports(self, keyword: str) -> List[ReportRecord]:
+        return self.report_registry.search(keyword)
+
+    def add_report_section(
+        self, report_id: str, title: str,
+        content: str = "", order: int = 0,
+    ) -> Optional[ReportSection]:
+        sec = self.report_registry.add_section(report_id, title, content, order)
+        if sec:
+            record = self.report_registry.get(report_id)
+            self._put(EVENT_REPORT_UPDATED, record)
+        return sec
+
+    def update_report_section(
+        self, report_id: str, section_id: str,
+        title: str = "", content: str = "",
+    ) -> None:
+        self.report_registry.update_section(report_id, section_id, title, content)
+        record = self.report_registry.get(report_id)
+        if record:
+            self._put(EVENT_REPORT_UPDATED, record)
+
+    def remove_report_section(self, report_id: str, section_id: str) -> None:
+        self.report_registry.remove_section(report_id, section_id)
+        record = self.report_registry.get(report_id)
+        if record:
+            self._put(EVENT_REPORT_UPDATED, record)
+
+    def publish_report(self, report_id: str) -> None:
+        self.report_registry.publish(report_id)
+        record = self.report_registry.get(report_id)
+        if record:
+            self._put(EVENT_REPORT_UPDATED, record)
+
+    def unpublish_report(self, report_id: str) -> None:
+        self.report_registry.unpublish(report_id)
+        record = self.report_registry.get(report_id)
+        if record:
+            self._put(EVENT_REPORT_UPDATED, record)
+
+    # ------------------------------------------------------------------
+    # Pipeline Center — Phase 9
+    # ------------------------------------------------------------------
+
+    def _gen_pipeline_id(self) -> str:
+        date_str = datetime.now().strftime("%Y%m%d")
+        key = f"PL-{date_str}"
+        count = self._exp_counter.get(key, 0) + 1
+        self._exp_counter[key] = count
+        return f"PL-{date_str}-{count:03d}"
+
+    def create_pipeline(
+        self,
+        name:         str,
+        description:  str                 = "",
+        author:       str                 = "",
+        schedule:     str                 = "",
+        experiment_id: Optional[str]      = None,
+        strategy_id:  Optional[str]       = None,
+        dataset_ids:  Optional[List[str]] = None,
+        feature_ids:  Optional[List[str]] = None,
+        tags:         Optional[List[str]] = None,
+    ) -> PipelineRecord:
+        now = datetime.now()
+        record = PipelineRecord(
+            pipeline_id   = self._gen_pipeline_id(),
+            name          = name,
+            description   = description,
+            author        = author,
+            schedule      = schedule,
+            experiment_id = experiment_id,
+            strategy_id   = strategy_id,
+            dataset_ids   = dataset_ids or [],
+            feature_ids   = feature_ids or [],
+            tags          = tags or [],
+            created_by    = author,
+            created_at    = now,
+            updated_at    = now,
+        )
+        self.pipeline_registry.create(record)
+        self._put(EVENT_PIPELINE_CREATED, record)
+        return record
+
+    def update_pipeline(self, record: PipelineRecord) -> None:
+        record.updated_at = datetime.now()
+        self.pipeline_registry.update(record)
+        self._put(EVENT_PIPELINE_UPDATED, record)
+
+    def delete_pipeline(self, pipeline_id: str) -> None:
+        self.pipeline_registry.delete(pipeline_id)
+
+    def get_pipeline(self, pipeline_id: str) -> Optional[PipelineRecord]:
+        return self.pipeline_registry.get(pipeline_id)
+
+    def list_pipelines(
+        self,
+        status: Optional[PipelineStatus] = None,
+        tag:    Optional[str]            = None,
+        author: Optional[str]            = None,
+    ) -> List[PipelineRecord]:
+        return self.pipeline_registry.filter(status=status, tag=tag, author=author)
+
+    def search_pipelines(self, keyword: str) -> List[PipelineRecord]:
+        return self.pipeline_registry.search(keyword)
+
+    def add_pipeline_step(
+        self,
+        pipeline_id: str,
+        name:        str,
+        step_type:   str                       = "custom",
+        params:      Optional[Dict[str, Any]]  = None,
+        depends_on:  Optional[List[str]]       = None,
+        timeout_sec: int                       = 3600,
+    ) -> Optional[PipelineStepRecord]:
+        step = self.pipeline_registry.add_step(
+            pipeline_id, name, step_type, params, depends_on, timeout_sec)
+        if step:
+            record = self.pipeline_registry.get(pipeline_id)
+            self._put(EVENT_PIPELINE_UPDATED, record)
+        return step
+
+    def remove_pipeline_step(self, pipeline_id: str, step_id: str) -> None:
+        self.pipeline_registry.remove_step(pipeline_id, step_id)
+        record = self.pipeline_registry.get(pipeline_id)
+        if record:
+            self._put(EVENT_PIPELINE_UPDATED, record)
+
+    def run_pipeline(
+        self, pipeline_id: str, trigger: str = "manual"
+    ) -> Optional[PipelineRun]:
+        run = self.pipeline_registry.start(pipeline_id, trigger)
+        if run:
+            record = self.pipeline_registry.get(pipeline_id)
+            self._put(EVENT_PIPELINE_STARTED, record)
+        return run
+
+    def complete_pipeline(
+        self, pipeline_id: str,
+        duration_sec: float               = 0.0,
+        step_logs: Optional[Dict[str, str]] = None,
+    ) -> None:
+        self.pipeline_registry.complete(pipeline_id, duration_sec, step_logs)
+        record = self.pipeline_registry.get(pipeline_id)
+        if record:
+            self._put(EVENT_PIPELINE_COMPLETED, record)
+
+    def fail_pipeline(
+        self, pipeline_id: str,
+        error_msg: str = "", failed_step: str = "",
+    ) -> None:
+        self.pipeline_registry.fail(pipeline_id, error_msg, failed_step)
+        record = self.pipeline_registry.get(pipeline_id)
+        if record:
+            self._put(EVENT_PIPELINE_FAILED, record)
+
+    def pause_pipeline(self, pipeline_id: str) -> None:
+        self.pipeline_registry.pause(pipeline_id)
+        record = self.pipeline_registry.get(pipeline_id)
+        if record:
+            self._put(EVENT_PIPELINE_UPDATED, record)
+
+    def reset_pipeline(self, pipeline_id: str) -> None:
+        self.pipeline_registry.reset(pipeline_id)
+        record = self.pipeline_registry.get(pipeline_id)
+        if record:
+            self._put(EVENT_PIPELINE_UPDATED, record)
+
+    def get_pipeline_runs(self, pipeline_id: str) -> List[PipelineRun]:
+        return self.pipeline_registry.get_runs(pipeline_id)
+
+
+    # ------------------------------------------------------------------
+    # Artifact Center — Phase 10
+    # ------------------------------------------------------------------
+
+    def _gen_artifact_id(self) -> str:
+        date_str = datetime.now().strftime("%Y%m%d")
+        key = f"ART-{date_str}"
+        count = self._exp_counter.get(key, 0) + 1
+        self._exp_counter[key] = count
+        return f"ART-{date_str}-{count:03d}"
+
+    def register_artifact(
+        self,
+        name:          str,
+        artifact_type: "ArtifactType"           = None,
+        description:   str                       = "",
+        author:        str                       = "",
+        file_path:     str                       = "",
+        file_size_kb:  float                     = 0.0,
+        checksum:      str                       = "",
+        version:       str                       = "v1.0",
+        experiment_id: Optional[str]             = None,
+        pipeline_id:   Optional[str]             = None,
+        strategy_id:   Optional[str]             = None,
+        model_id:      Optional[str]             = None,
+        backtest_id:   Optional[str]             = None,
+        report_id:     Optional[str]             = None,
+        tags:          Optional[List[str]]       = None,
+        metadata:      Optional[Dict[str, Any]]  = None,
+    ) -> ArtifactRecord:
+        from .constant import ArtifactType as AT
+        now = datetime.now()
+        record = ArtifactRecord(
+            artifact_id   = self._gen_artifact_id(),
+            name          = name,
+            artifact_type = artifact_type or AT.OTHER,
+            description   = description,
+            author        = author,
+            file_path     = file_path,
+            file_size_kb  = file_size_kb,
+            checksum      = checksum,
+            version       = version,
+            experiment_id = experiment_id,
+            pipeline_id   = pipeline_id,
+            strategy_id   = strategy_id,
+            model_id      = model_id,
+            backtest_id   = backtest_id,
+            report_id     = report_id,
+            tags          = tags or [],
+            metadata      = metadata or {},
+            created_by    = author,
+            created_at    = now,
+            updated_at    = now,
+        )
+        self.artifact_registry.create(record)
+        self._put(EVENT_ARTIFACT_CREATED, record)
+        return record
+
+    def update_artifact(self, record: ArtifactRecord) -> None:
+        record.updated_at = datetime.now()
+        self.artifact_registry.update(record)
+
+    def delete_artifact(self, artifact_id: str) -> None:
+        self.artifact_registry.delete(artifact_id)
+        self._put(EVENT_ARTIFACT_DELETED, artifact_id)
+
+    def get_artifact(self, artifact_id: str) -> Optional[ArtifactRecord]:
+        return self.artifact_registry.get(artifact_id)
+
+    def list_artifacts(
+        self,
+        artifact_type: Optional["ArtifactType"] = None,
+        tag:           Optional[str]             = None,
+        author:        Optional[str]             = None,
+        archived:      Optional[bool]            = None,
+        experiment_id: Optional[str]             = None,
+        pipeline_id:   Optional[str]             = None,
+    ) -> List[ArtifactRecord]:
+        return self.artifact_registry.filter(
+            artifact_type=artifact_type, tag=tag, author=author,
+            archived=archived, experiment_id=experiment_id,
+            pipeline_id=pipeline_id,
+        )
+
+    def search_artifacts(self, keyword: str) -> List[ArtifactRecord]:
+        return self.artifact_registry.search(keyword)
+
+    def archive_artifact(self, artifact_id: str) -> None:
+        self.artifact_registry.archive(artifact_id)
+
+    def unarchive_artifact(self, artifact_id: str) -> None:
+        self.artifact_registry.unarchive(artifact_id)
+
+    def download_artifact(self, artifact_id: str) -> None:
+        self.artifact_registry.increment_download(artifact_id)
+
+    def artifact_total_size_kb(self) -> float:
+        return self.artifact_registry.total_size_kb()
+
+    def artifact_type_counts(self) -> Dict:
+        return self.artifact_registry.type_counts()
+
+    # ------------------------------------------------------------------
+    # Workspace Manager — Phase 10
+    # ------------------------------------------------------------------
+
+    def _gen_workspace_id(self) -> str:
+        date_str = datetime.now().strftime("%Y%m%d")
+        key = f"WS-{date_str}"
+        count = self._exp_counter.get(key, 0) + 1
+        self._exp_counter[key] = count
+        return f"WS-{date_str}-{count:03d}"
+
+    def _gen_project_id(self) -> str:
+        date_str = datetime.now().strftime("%Y%m%d")
+        key = f"PRJ-{date_str}"
+        count = self._exp_counter.get(key, 0) + 1
+        self._exp_counter[key] = count
+        return f"PRJ-{date_str}-{count:03d}"
+
+    def create_workspace(
+        self,
+        name:        str,
+        description: str              = "",
+        root_path:   str              = "",
+        members:     Optional[List[str]] = None,
+        tags:        Optional[List[str]] = None,
+        created_by:  str              = "",
+    ) -> WorkspaceRecord:
+        from .constant import WorkspaceStatus
+        now = datetime.now()
+        record = WorkspaceRecord(
+            workspace_id = self._gen_workspace_id(),
+            name         = name,
+            description  = description,
+            root_path    = root_path,
+            members      = members or [],
+            tags         = tags or [],
+            created_by   = created_by,
+            created_at   = now,
+            updated_at   = now,
+        )
+        self.workspace_registry.create_workspace(record)
+        self._put(EVENT_WORKSPACE_SWITCHED, record)
+        return record
+
+    def update_workspace(self, record: WorkspaceRecord) -> None:
+        self.workspace_registry.update_workspace(record)
+
+    def delete_workspace(self, workspace_id: str) -> None:
+        self.workspace_registry.delete_workspace(workspace_id)
+
+    def get_workspace(self, workspace_id: str) -> Optional[WorkspaceRecord]:
+        return self.workspace_registry.get_workspace(workspace_id)
+
+    def list_workspaces(self) -> List[WorkspaceRecord]:
+        return self.workspace_registry.list_workspaces()
+
+    def get_active_workspace(self) -> Optional[WorkspaceRecord]:
+        return self.workspace_registry.get_active()
+
+    def switch_workspace(self, workspace_id: str) -> None:
+        self.workspace_registry.set_active(workspace_id)
+        record = self.workspace_registry.get_workspace(workspace_id)
+        if record:
+            self._put(EVENT_WORKSPACE_SWITCHED, record)
+
+    def archive_workspace(self, workspace_id: str) -> None:
+        self.workspace_registry.archive_workspace(workspace_id)
+
+    def add_workspace_member(self, workspace_id: str, member: str) -> None:
+        self.workspace_registry.add_member(workspace_id, member)
+
+    def remove_workspace_member(self, workspace_id: str, member: str) -> None:
+        self.workspace_registry.remove_member(workspace_id, member)
+
+    def create_project(
+        self,
+        name:         str,
+        workspace_id: str              = "",
+        description:  str              = "",
+        tags:         Optional[List[str]] = None,
+        created_by:   str              = "",
+    ) -> ProjectRecord:
+        now = datetime.now()
+        if not workspace_id:
+            ws = self.workspace_registry.get_active()
+            workspace_id = ws.workspace_id if ws else ""
+        record = ProjectRecord(
+            project_id   = self._gen_project_id(),
+            name         = name,
+            description  = description,
+            workspace_id = workspace_id,
+            tags         = tags or [],
+            created_by   = created_by,
+            created_at   = now,
+            updated_at   = now,
+        )
+        self.workspace_registry.create_project(record)
+        self._put(EVENT_PROJECT_CREATED, record)
+        return record
+
+    def update_project(self, record: ProjectRecord) -> None:
+        self.workspace_registry.update_project(record)
+        self._put(EVENT_PROJECT_UPDATED, record)
+
+    def delete_project(self, project_id: str) -> None:
+        self.workspace_registry.delete_project(project_id)
+
+    def get_project(self, project_id: str) -> Optional[ProjectRecord]:
+        return self.workspace_registry.get_project(project_id)
+
+    def list_projects(
+        self, workspace_id: Optional[str] = None
+    ) -> List[ProjectRecord]:
+        return self.workspace_registry.list_projects(workspace_id)
+
+    def search_projects(self, keyword: str) -> List[ProjectRecord]:
+        return self.workspace_registry.search_projects(keyword)
+
+    def star_project(self, project_id: str) -> None:
+        self.workspace_registry.star_project(project_id)
+
+    def unstar_project(self, project_id: str) -> None:
+        self.workspace_registry.unstar_project(project_id)
+
+    def get_starred_projects(self) -> List[ProjectRecord]:
+        return self.workspace_registry.get_starred()
+
+    def link_project_experiment(
+        self, project_id: str, experiment_id: str
+    ) -> None:
+        self.workspace_registry.link_experiment(project_id, experiment_id)
+
+    def unlink_project_experiment(
+        self, project_id: str, experiment_id: str
+    ) -> None:
+        self.workspace_registry.unlink_experiment(project_id, experiment_id)
+
+    # ------------------------------------------------------------------
+    # 内部事件广播
+    # ------------------------------------------------------------------
+
+    def _put(self, event_type: str, data: object = None) -> None:
+        self.event_engine.put(Event(event_type, data))
