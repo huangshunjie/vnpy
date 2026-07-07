@@ -51,6 +51,7 @@ from vnpy.performance_monitor import PerformanceMonitorApp
 from vnpy.backtest_bridge import BacktestBridgeApp
 from vnpy.system_console import SystemConsoleApp
 from vnpy.market_reality_ai import MarketRealityApp
+from vnpy.temporal_intelligence_ai import TemporalIntelligenceApp
 # from vnpy_datarecorder import DataRecorderApp
 # from vnpy_riskmanager import RiskManagerApp
 # from vnpy_webtrader import WebTraderApp
@@ -114,6 +115,7 @@ def main():
     main_engine.add_app(BacktestBridgeApp)
     main_engine.add_app(SystemConsoleApp)
     main_engine.add_app(MarketRealityApp)
+    main_engine.add_app(TemporalIntelligenceApp)
     # main_engine.add_app(DataRecorderApp)
     # main_engine.add_app(RiskManagerApp)
     # main_engine.add_app(WebTraderApp)

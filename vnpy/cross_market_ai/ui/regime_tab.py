@@ -166,13 +166,13 @@ class RegimeTab(QtWidgets.QWidget):
         layout.addWidget(self._history_table)
         return group
 
-    # ©¤©¤ ÊÂ¼þ×¢²á ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+    # ï¿½ï¿½ï¿½ï¿½ ï¿½Â¼ï¿½×¢ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 
     def _register_events(self) -> None:
         self.signal_aligned.connect(self._on_aligned_event)
         self._event_engine.register(EVENT_REGIME_ALIGNED, self.signal_aligned.emit)
 
-    # ©¤©¤ ²Ûº¯Êý ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+    # ï¿½ï¿½ï¿½ï¿½ ï¿½Ûºï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 
     def _on_align_single(self) -> None:
         market_a = self._combo_a.currentText()
@@ -200,7 +200,7 @@ class RegimeTab(QtWidgets.QWidget):
         if data.get("status") == "ok" and data.get("record"):
             self._update_metrics(data["record"])
 
-    # ©¤©¤ Ë¢ÐÂÂß¼­ ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+    # ï¿½ï¿½ï¿½ï¿½ Ë¢ï¿½ï¿½ï¿½ß¼ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 
     def _update_metrics(self, rec: dict) -> None:
         overlap   = rec.get("overlap_score",   0.0)
@@ -225,10 +225,10 @@ class RegimeTab(QtWidgets.QWidget):
         _apply_score_color(self._lbl_score, score)
 
         if alignable:
-            self._lbl_alignable.setText("?  ¿É¶ÔÆë")
+            self._lbl_alignable.setText("?  ï¿½É¶ï¿½ï¿½ï¿½")
             self._lbl_alignable.setStyleSheet("font-size:13px; font-weight:bold; color:#4caf50;")
         else:
-            self._lbl_alignable.setText("?  ½á¹¹²îÒì¹ý´ó")
+            self._lbl_alignable.setText("?  ï¿½á¹¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½")
             self._lbl_alignable.setStyleSheet("font-size:13px; font-weight:bold; color:#f44336;")
 
     def _refresh_mapping(self, rec: dict) -> None:
@@ -240,14 +240,14 @@ class RegimeTab(QtWidgets.QWidget):
             row = self._mapping_table.rowCount()
             self._mapping_table.insertRow(row)
             self._mapping_table.setItem(row, 0, _cell(ra, "#4fc3f7"))
-            self._mapping_table.setItem(row, 1, _cell("¡ú"))
+            self._mapping_table.setItem(row, 1, _cell("ï¿½ï¿½"))
             self._mapping_table.setItem(row, 2, _cell(rb, "#4fc3f7"))
         parts = []
         if unmatched_a:
-            parts.append(f"AÎ´Æ¥Åä: {', '.join(unmatched_a)}")
+            parts.append(f"AÎ´Æ¥ï¿½ï¿½: {', '.join(unmatched_a)}")
         if unmatched_b:
-            parts.append(f"BÎ´Æ¥Åä: {', '.join(unmatched_b)}")
-        self._lbl_unmatched.setText("  ".join(parts) if parts else "È«²¿Æ¥Åä ?")
+            parts.append(f"BÎ´Æ¥ï¿½ï¿½: {', '.join(unmatched_b)}")
+        self._lbl_unmatched.setText("  ".join(parts) if parts else "È«ï¿½ï¿½Æ¥ï¿½ï¿½ ?")
 
     def _append_history_row(self, rec: dict) -> None:
         row      = self._history_table.rowCount()
@@ -285,7 +285,7 @@ class RegimeTab(QtWidgets.QWidget):
         self._stat_avg.findChild(QtWidgets.QLabel, "val").setText(f"{avg:.4f}")
 
 
-# ©¤©¤ Ð¡¹¤¾ß ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+# ï¿½ï¿½ï¿½ï¿½ Ð¡ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 
 def _hline() -> QtWidgets.QFrame:
     line = QtWidgets.QFrame()
