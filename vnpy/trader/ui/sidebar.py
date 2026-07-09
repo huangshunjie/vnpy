@@ -15,7 +15,7 @@ from .qt import QtCore, QtGui, QtWidgets
 _ICO_DIR   = pathlib.Path(__file__).parent / "ico"
 
 # 这些 App 保留在工具栏直接显示（原 VeighNa 自带）
-_TOOLBAR_APPS: set = {"CtaStrategy", "CtaBacktester", "DataManager", "PortfolioManager"}
+_TOOLBAR_APPS: set = {"CtaStrategy", "CtaBacktester", "DataManager", "PortfolioManager", "PaperAccount"}
 _APPS_ICON = str(_ICO_DIR / "editor.ico")
 
 APP_GROUPS: List[Tuple[str, str, str, List[str]]] = [
@@ -248,7 +248,7 @@ def _patched_init_menu(self) -> None:
                     get_icon_path(__file__, "exit.ico"), self.close)
 
     # ── 功能菜单：只保留三个固定 App + VeighNa Apps 入口 ────────
-    _MENU_APPS = {"CtaBacktester", "DataManager", "PortfolioManager"}
+    _MENU_APPS = {"CtaBacktester", "DataManager", "PortfolioManager", "PaperAccount"}
     app_menu = bar.addMenu("功能")
     self._app_funcs: Dict[str, tuple] = {}
 
