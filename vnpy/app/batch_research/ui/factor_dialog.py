@@ -41,7 +41,21 @@ _BUILTIN_RESULT_FACTORS = [
     ("daily_trade_count",     "日均交易次数", False),
 ]
 
-_RETURN_COLS = ["total_return", "annual_return", "sharpe_ratio"]
+_RETURN_COLS = [
+    ("总收益% total_return", "total_return"),
+    ("年化收益% annual_return", "annual_return"),
+    ("夏普比率 sharpe_ratio", "sharpe_ratio"),
+    ("卡玛比率 calmar_ratio", "calmar_ratio"),
+    ("收益回撤比 return_drawdown_ratio", "return_drawdown_ratio"),
+    ("日胜率 win_rate", "win_rate"),
+    ("盈利因子 profit_factor", "profit_factor"),
+    ("EWM夏普 ewm_sharpe", "ewm_sharpe"),
+    ("年化波动率% annual_volatility", "annual_volatility"),
+    ("最大回撤% max_ddpercent", "max_ddpercent"),
+    ("日均交易次数 daily_trade_count", "daily_trade_count"),
+]
+_RETURN_COL_MAP = {label: col for label, col in _RETURN_COLS}
+_RETURN_COL_LABELS = [label for label, _ in _RETURN_COLS]
 
 
 class FactorAnalysisDialog(QtWidgets.QDialog):
@@ -91,7 +105,7 @@ class FactorAnalysisDialog(QtWidgets.QDialog):
         ret_group = QtWidgets.QGroupBox("对标收益列（IC 分析）")
         ret_layout = QtWidgets.QVBoxLayout(ret_group)
         self._return_combo = QtWidgets.QComboBox()
-        self._return_combo.addItems(_RETURN_COLS)
+        self._return_combo.addItems(_RETURN_COL_LABELS)
         ret_layout.addWidget(self._return_combo)
 
         layer_layout = QtWidgets.QHBoxLayout()
@@ -235,7 +249,7 @@ class FactorAnalysisDialog(QtWidgets.QDialog):
             )
 
         # IC / 分层 / 相关矩阵（pandas 直接计算，不走旧 calculate()）
-        return_col = self._return_combo.currentText()
+        return_col = _RETURN_COL_MAP.get(self._return_combo.currentText(), "total_return")
         n_layers   = self._layer_spin.value()
         success    = [r for r in self._results if r.status == "success"]
         if not success:
@@ -288,16 +302,18 @@ class FactorAnalysisDialog(QtWidgets.QDialog):
                     for c in factor_cols
                 }
                 best = max(rank_ics, key=lambda c: rank_ics[c])
-                df2 = fdf[[best, return_col]].dropna().copy()
-                df2["_layer"] = pd.qcut(df2[best], q=n_layers,
-                                        labels=False, duplicates="drop")
+                best_series = fdf[best] if isinstance(fdf[best], pd.Series) else fdf[best].iloc[:, 0]
+                ret_series = fdf[return_col] if isinstance(fdf[return_col], pd.Series) else fdf[return_col].iloc[:, 0]
+                df2 = pd.concat([best_series.rename('_best'), ret_series.rename('_ret')], axis=1).dropna().copy()
+                df2["_rank"] = df2["_best"].rank(method="first")
+                df2["_layer"] = pd.qcut(df2["_rank"], q=n_layers, labels=False)
                 for lid in sorted(df2["_layer"].dropna().unique()):
                     grp = df2[df2["_layer"] == lid]
                     self._layer_table.add_row([
                         str(int(lid) + 1), str(len(grp)),
-                        f"{grp[return_col].mean():.2f}",
-                        f"{grp[return_col].median():.2f}",
-                        f"{grp[return_col].std():.2f}",
+                        f"{grp['_ret'].mean():.2f}",
+                        f"{grp['_ret'].median():.2f}",
+                        f"{grp['_ret'].std():.2f}",
                     ])
             except Exception as e:
                 self._layer_table.add_row([f"分层失败：{e}", "", "", "", ""])

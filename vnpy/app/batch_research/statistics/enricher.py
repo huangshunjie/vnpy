@@ -350,26 +350,39 @@ class TushareNameProvider(NameProvider):
         从 VeighNa 标准配置文件读取 token 并构建 Provider。
 
         优先级：
-          1. ~/.vnpy/vt_setting.json  key="tushare_token"
-          2. ~/.vnpy/tushare_token.txt  （纯文本，单行）
+          1. ~/.vntrader/vt_setting.json  key="datafeed.password"（VeighNa 标准配置）
+          2. ~/.vnpy/vt_setting.json      key="tushare_token"
+          3. ~/.vnpy/tushare_token.txt    （纯文本，单行）
 
         找不到 token 时返回 None。
         """
         import json
         from pathlib import Path
 
-        # 路径 1：vt_setting.json
-        cfg = Path.home() / ".vnpy" / "vt_setting.json"
+        # 路径 1：~/.vntrader/vt_setting.json（VeighNa 实际写入位置）
+        cfg = Path.home() / ".vntrader" / "vt_setting.json"
         if cfg.exists():
             try:
                 data = json.loads(cfg.read_text(encoding="utf-8"))
+                if data.get("datafeed.name", "").lower() == "tushare":
+                    token = data.get("datafeed.password", "").strip()
+                    if token:
+                        return TushareNameProvider(token)
+            except Exception:
+                pass
+
+        # 路径 2：~/.vnpy/vt_setting.json
+        cfg2 = Path.home() / ".vnpy" / "vt_setting.json"
+        if cfg2.exists():
+            try:
+                data = json.loads(cfg2.read_text(encoding="utf-8"))
                 token = data.get("tushare_token", "").strip()
                 if token:
                     return TushareNameProvider(token)
             except Exception:
                 pass
 
-        # 路径 2：独立 token 文件
+        # 路径 3：独立 token 文件
         token_file = Path.home() / ".vnpy" / "tushare_token.txt"
         if token_file.exists():
             token = token_file.read_text(encoding="utf-8").strip()

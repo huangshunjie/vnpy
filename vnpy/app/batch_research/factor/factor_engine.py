@@ -603,6 +603,46 @@ def _factor_engine_run(
 
     ranked = scores.rank(ascending=False, method='min').astype(int)
 
+    # 计算每个因子对 total_return 的 IC / Rank IC，写回到最优因子对应的字段
+    return_col = "total_return"
+    ic_map:      dict[str, float] = {}
+    rank_ic_map: dict[str, float] = {}
+    ic_ir_map:   dict[str, float] = {}
+
+    if return_col in factor_df.columns or any(
+        getattr(r, return_col, None) is not None for r in results
+    ):
+        ret_series = pd.Series(
+            {r.vt_symbol: float(getattr(r, return_col, 0.0) or 0.0)
+             for r in results if getattr(r, 'status', '') in ('success', 'SUCCESS')}
+        )
+        for name in self.factor_names:
+            if name not in factor_df.columns:
+                continue
+            aligned = pd.concat([factor_df[name], ret_series], axis=1).dropna()
+            if len(aligned) < 3:
+                continue
+            ic_val      = float(aligned.iloc[:, 0].corr(aligned.iloc[:, 1], method='pearson'))
+            rank_ic_val = float(aligned.iloc[:, 0].corr(aligned.iloc[:, 1], method='spearman'))
+            ic_map[name]      = round(ic_val, 4)
+            rank_ic_map[name] = round(rank_ic_val, 4)
+
+        # IC IR 基于所有因子的 rank_ic 均值/标准差（截面单期，近似值）
+        if rank_ic_map:
+            import math
+            vals = [v for v in rank_ic_map.values() if not math.isnan(v)]
+            if len(vals) >= 2:
+                mean_ic = sum(vals) / len(vals)
+                std_ic  = (sum((v - mean_ic) ** 2 for v in vals) / (len(vals) - 1)) ** 0.5
+                ic_ir_val = round(mean_ic / std_ic, 4) if std_ic > 0 else float('nan')
+            else:
+                ic_ir_val = float('nan')
+        else:
+            ic_ir_val = float('nan')
+
+    # 找出 RankIC 绝对值最大的因子作为代表因子
+    best_factor = max(rank_ic_map, key=lambda k: abs(rank_ic_map[k])) if rank_ic_map else None
+
     for r in results:
         sym = r.vt_symbol
         r.factor_scores = {
@@ -619,6 +659,11 @@ def _factor_engine_run(
             and selector_top_n is not None
             and r.factor_rank <= selector_top_n
         )
+        # 写回 IC / Rank IC / IC IR（以代表因子的值写入）
+        if best_factor:
+            r.ic      = ic_map.get(best_factor)
+            r.rank_ic = rank_ic_map.get(best_factor)
+            r.ic_ir   = ic_ir_val if not (ic_ir_val != ic_ir_val) else None
 
     return results
 
