@@ -170,6 +170,8 @@ class ResultTableWidget(QtWidgets.QTableWidget):
         self.setSelectionBehavior(self.SelectionBehavior.SelectRows)
         self.horizontalHeader().setStretchLastSection(True)
         self.verticalHeader().setDefaultSectionSize(28)
+        self.horizontalHeader().setSortIndicatorShown(False)
+        self.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
 
         # 表头右键菜单
         self.horizontalHeader().setContextMenuPolicy(
@@ -187,9 +189,28 @@ class ResultTableWidget(QtWidgets.QTableWidget):
             "QHeaderView::section {"
             "  background-color: #1E3A5F;"
             "  color: #FFFFFF;"
-            "  padding: 4px;"
+            "  padding: 4px 6px;"
             "  border: 1px solid #2A4A7F;"
             "  font-weight: bold;"
+            "}"
+            "QHeaderView::section:hover {"
+            "  background-color: #2A5298;"
+            "}"
+            "QHeaderView::down-arrow {"
+            "  image: none;"
+            "  width: 0; height: 0;"
+            "  border-left: 4px solid transparent;"
+            "  border-right: 4px solid transparent;"
+            "  border-top: 6px solid #FFA500;"
+            "  margin-right: 5px;"
+            "}"
+            "QHeaderView::up-arrow {"
+            "  image: none;"
+            "  width: 0; height: 0;"
+            "  border-left: 4px solid transparent;"
+            "  border-right: 4px solid transparent;"
+            "  border-bottom: 6px solid #4CFF82;"
+            "  margin-right: 5px;"
             "}"
         )
         self.setStyleSheet(
@@ -234,7 +255,65 @@ class ResultTableWidget(QtWidgets.QTableWidget):
         self._results.clear()
 
     def enable_sorting(self) -> None:
-        self.setSortingEnabled(True)
+        pass  # 排序由 _on_header_clicked 手动驱动
+
+    def _on_header_clicked(self, logical_index: int) -> None:
+        """点击列名切换升/降序，完全自管理状态，不依赖 Qt sortIndicator 读取。"""
+        if not hasattr(self, '_sort_col'):
+            self._sort_col = -1
+            self._sort_asc = True
+
+        if self._sort_col == logical_index:
+            self._sort_asc = not self._sort_asc
+        else:
+            self._sort_col = logical_index
+            self._sort_asc = False  # 首次点击新列默认降序
+
+        order = (
+            QtCore.Qt.SortOrder.AscendingOrder
+            if self._sort_asc
+            else QtCore.Qt.SortOrder.DescendingOrder
+        )
+        self.horizontalHeader().setSortIndicatorShown(True)
+        self.horizontalHeader().setSortIndicator(logical_index, order)
+        self._manual_sort(logical_index, self._sort_asc)
+
+    def _manual_sort(self, col: int, ascending: bool) -> None:
+        """
+        手动排序：取出所有行数据，排序后写回。
+        全程保持 setSortingEnabled(False)，避免 Qt 内部状态干扰。
+        "-"（未计算）值始终排在末尾。
+        """
+        n_rows = self.rowCount()
+        n_cols = self.columnCount()
+        if n_rows == 0:
+            return
+
+        # 取出所有行
+        all_rows = []
+        for r in range(n_rows):
+            all_rows.append([self.takeItem(r, c) for c in range(n_cols)])
+
+        # 排序 key："-" 排末尾，数值按大小，文字按字母
+        def sort_key(row_items):
+            item = row_items[col]
+            if item is None or item.text() == "-":
+                return (1, 0.0, "")
+            if isinstance(item, _SortableItem):
+                try:
+                    return (0, float(item._raw or 0), "")
+                except (TypeError, ValueError):
+                    pass
+            return (0, 0.0, item.text() or "")
+
+        all_rows.sort(key=sort_key, reverse=not ascending)
+
+        # 写回
+        for r, row_items in enumerate(all_rows):
+            for c, item in enumerate(row_items):
+                if item is not None:
+                    self.setItem(r, c, item)
+
 
     def get_results(self) -> list[BatchBacktestResult]:
         return list(self._results)

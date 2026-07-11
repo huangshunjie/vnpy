@@ -113,10 +113,11 @@ class ResultEnricher:
         self,
         annual_days: int = 240,
         name_provider: NameProvider | None = None,
+        benchmark_provider: "BenchmarkProvider | None" = None,
     ) -> None:
-        self._annual_days    = annual_days
-        self._name_provider  = name_provider or DictNameProvider()
-
+        self._annual_days       = annual_days
+        self._name_provider     = name_provider or DictNameProvider()
+        self._benchmark_provider = benchmark_provider
     # ── 公开 API ─────────────────────────────────── #
 
     def enrich(self, result: "BacktestResult") -> BatchBacktestResult:
@@ -127,8 +128,6 @@ class ResultEnricher:
         """
         stats = result.statistics or {}
 
-        # L1 指标在 _build_risk / _build_trading 内直接调用 Metrics 方法计算，不修改 stats dict
-
         basic   = self._build_basic(result, stats)
         returns = self._build_returns(stats)
         risk    = self._build_risk(stats)
@@ -136,7 +135,7 @@ class ResultEnricher:
         runinfo = self._build_runinfo(result, stats)
         costs   = self._build_costs(stats)
 
-        return BatchBacktestResult(
+        bbr = BatchBacktestResult(
             **basic,
             **returns,
             **risk,
@@ -145,12 +144,117 @@ class ResultEnricher:
             **runinfo,
         )
 
+        # L2: daily series stats
+        daily_extras = self._build_daily(result)
+        bbr.sortino_ratio = daily_extras.get("sortino_ratio")
+        bbr.var_95        = daily_extras.get("var_95")
+        bbr.cvar_95       = daily_extras.get("cvar_95")
+
+        # L3: per-trade stats
+        trade_extras = self._build_trades(result)
+        bbr.avg_holding_days = trade_extras.get("avg_holding_days")
+        bbr.trade_win_rate   = trade_extras.get("trade_win_rate")
+        bbr.avg_profit_trade = trade_extras.get("avg_profit_trade")
+        bbr.avg_loss_trade   = trade_extras.get("avg_loss_trade")
+
+        # Alpha/Beta from benchmark
+        if self._benchmark_provider is not None:
+            ab = self._build_alpha_beta(result)
+            bbr.alpha = ab.get("alpha")
+            bbr.beta  = ab.get("beta")
+
+        return bbr
     def enrich_batch(
         self,
         results: list["BacktestResult"],
     ) -> list[BatchBacktestResult]:
         """批量转换，保持原始顺序。"""
         return [self.enrich(r) for r in results]
+
+    # ── L2: 逐日净值统计 ─────────────────────────── #
+
+    # ── Alpha/Beta 计算 ──────────────────────────── #
+
+    def _build_alpha_beta(self, result) -> dict:
+        """计算 Alpha/Beta（相对基准指数）。"""
+        from .metrics import RiskMetrics
+        daily_results = getattr(result, 'daily_results', None)
+        if not daily_results or self._benchmark_provider is None:
+            return {}
+        try:
+            stats = result.statistics or {}
+            capital = float(stats.get('capital', 1_000_000) or 1_000_000)
+
+            # 组合每日收益率序列
+            portfolio_returns = []
+            prev_balance = capital
+            dates = []
+            for dr in daily_results:
+                net_pnl = getattr(dr, 'net_pnl', 0.0) or 0.0
+                if prev_balance != 0:
+                    portfolio_returns.append(net_pnl / prev_balance)
+                    dates.append(getattr(dr, 'date', None))
+                prev_balance += net_pnl
+
+            # 基准每日收益率序列（按日期对齐）
+            benchmark_map = self._benchmark_provider.get_returns()
+            benchmark_returns = []
+            aligned_portfolio = []
+            for r, d in zip(portfolio_returns, dates):
+                if d in benchmark_map:
+                    aligned_portfolio.append(r)
+                    benchmark_returns.append(benchmark_map[d])
+
+            risk_free = float(stats.get('risk_free', 0.03))
+            alpha, beta = RiskMetrics.calc_alpha_beta(
+                aligned_portfolio, benchmark_returns,
+                risk_free_rate=risk_free,
+                annual_days=self._annual_days,
+            )
+            return {"alpha": alpha, "beta": beta}
+        except Exception:
+            return {}
+
+    def _build_daily(self, result) -> dict:
+        """从 BacktestResult.daily_results 计算索提诺、VaR、CVaR。"""
+        from .metrics import RiskMetrics
+        daily_results = getattr(result, 'daily_results', None)
+        if not daily_results:
+            return {}
+        try:
+            capital = float(result.statistics.get('capital', 1_000_000) or 1_000_000)
+            daily_returns = []
+            prev_balance = capital
+            for dr in daily_results:
+                net_pnl = getattr(dr, 'net_pnl', 0.0) or 0.0
+                if prev_balance != 0:
+                    daily_returns.append(net_pnl / prev_balance)
+                prev_balance += net_pnl
+            return {
+                "sortino_ratio": RiskMetrics.calc_sortino(daily_returns, self._annual_days),
+                "var_95":        RiskMetrics.calc_var(daily_returns, 0.95),
+                "cvar_95":       RiskMetrics.calc_cvar(daily_returns, 0.95),
+            }
+        except Exception:
+            return {}
+
+    # ── L3: 逐笔交易统计 ─────────────────────────── #
+
+    def _build_trades(self, result) -> dict:
+        """从 BacktestResult.trades 计算逐笔统计指标。"""
+        from .metrics import TradeMetrics
+        trades = getattr(result, 'trades', None)
+        if not trades:
+            return {}
+        try:
+            return {
+                "avg_holding_days": TradeMetrics.calc_avg_holding(trades),
+                "trade_win_rate":   TradeMetrics.calc_trade_win_rate(trades),
+                "avg_profit_trade": TradeMetrics.calc_avg_profit_trade(trades),
+                "avg_loss_trade":   TradeMetrics.calc_avg_loss_trade(trades),
+            }
+        except Exception:
+            return {}
 
     def set_name_provider(self, provider: NameProvider) -> None:
         """动态替换名称提供者（支持热更新）。"""
@@ -388,5 +492,104 @@ class TushareNameProvider(NameProvider):
             token = token_file.read_text(encoding="utf-8").strip()
             if token:
                 return TushareNameProvider(token)
+
+        return None
+
+
+# ──────────────────────────────────────────────────── #
+#  BenchmarkProvider  —  基准指数收益率接口
+# ──────────────────────────────────────────────────── #
+
+class BenchmarkProvider(ABC):
+    """基准指数日收益率提供者抽象基类。"""
+
+    @abstractmethod
+    def get_returns(self) -> dict:
+        """返回 {date: daily_return} 字典，date 为 datetime.date 类型。"""
+        ...
+
+
+class TushareBenchmarkProvider(BenchmarkProvider):
+    """
+    通过 Tushare index_daily 接口获取基准指数（默认沪深300）日收益率。
+
+    首次调用时拉取全量数据并缓存，后续调用不再请求网络。
+
+    用法::
+
+        provider = TushareBenchmarkProvider.from_settings()
+        enricher = ResultEnricher(benchmark_provider=provider)
+    """
+
+    def __init__(self, token: str, index_code: str = "399300.SZ") -> None:
+        self._token      = token
+        self._index_code = index_code
+        self._returns: dict = {}
+        self._loaded = False
+
+    def _ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        try:
+            import tushare as ts
+            from datetime import date as _date
+            pro = ts.pro_api(self._token)
+            df = pro.index_daily(
+                ts_code=self._index_code,
+                fields="trade_date,pct_chg",
+            )
+            for _, row in df.iterrows():
+                trade_date = str(row.get("trade_date", ""))
+                pct_chg    = row.get("pct_chg", None)
+                if len(trade_date) == 8 and pct_chg is not None:
+                    d = _date(int(trade_date[:4]),
+                              int(trade_date[4:6]),
+                              int(trade_date[6:8]))
+                    self._returns[d] = float(pct_chg) / 100.0
+            self._loaded = True
+        except Exception as e:
+            import warnings
+            warnings.warn(
+                f"TushareBenchmarkProvider: 加载失败，Alpha/Beta将显示为空。原因：{e}",
+                stacklevel=2,
+            )
+            self._loaded = True
+
+    def get_returns(self) -> dict:
+        self._ensure_loaded()
+        return self._returns
+
+    def reload(self) -> None:
+        """强制重新拉取。"""
+        self._loaded = False
+        self._returns.clear()
+        self._ensure_loaded()
+
+    @staticmethod
+    def from_settings(index_code: str = "399300.SZ") -> "TushareBenchmarkProvider | None":
+        """从 VeighNa 配置文件读取 token 并构建 Provider。"""
+        import json
+        from pathlib import Path
+
+        cfg = Path.home() / ".vntrader" / "vt_setting.json"
+        if cfg.exists():
+            try:
+                data = json.loads(cfg.read_text(encoding="utf-8"))
+                if data.get("datafeed.name", "").lower() == "tushare":
+                    token = data.get("datafeed.password", "").strip()
+                    if token:
+                        return TushareBenchmarkProvider(token, index_code)
+            except Exception:
+                pass
+
+        cfg2 = Path.home() / ".vnpy" / "vt_setting.json"
+        if cfg2.exists():
+            try:
+                data = json.loads(cfg2.read_text(encoding="utf-8"))
+                token = data.get("tushare_token", "").strip()
+                if token:
+                    return TushareBenchmarkProvider(token, index_code)
+            except Exception:
+                pass
 
         return None

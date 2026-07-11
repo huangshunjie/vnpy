@@ -76,8 +76,10 @@ class Worker:
         result.run_start_time = datetime.now()
 
         try:
-            stats = self._run_engine(task, parameter, bars, suppress_output)
+            stats, daily_results, trades = self._run_engine(task, parameter, bars, suppress_output)
             result.statistics = stats
+            result.daily_results = daily_results
+            result.trades = trades
             result.status = TaskStatus.SUCCESS if stats else TaskStatus.SKIPPED
             logger.debug(
                 "[%s] %s  total_return=%.2f%%  sharpe=%.2f",
@@ -157,27 +159,11 @@ class Worker:
             engine.load_data()
 
         if not engine.history_data:
-            return {}
+            return {}, None, None
 
         engine.run_backtesting()
         engine.calculate_result()
         stats: dict = engine.calculate_statistics(output=False)
-        return stats
-
-    @staticmethod
-    def _extract_daily_results(engine) -> list | None:
-        """
-        提取逐日净値序列（L2预留）。
-
-        待 BacktestingEngine 暴露 daily_results 属性后实现。
-        """
-        return None  # TODO: return engine.daily_results when available
-
-    @staticmethod
-    def _extract_trades(engine) -> list | None:
-        """
-        提取逐笔交易记录（L3预留）。
-
-        待 BacktestingEngine 暴露 trades 属性后实现。
-        """
-        return None  # TODO: return engine.trades when available
+        daily_results = list(engine.daily_results.values()) if getattr(engine, 'daily_results', None) else None
+        trades = list(engine.trades.values()) if getattr(engine, 'trades', None) else None
+        return stats, daily_results, trades

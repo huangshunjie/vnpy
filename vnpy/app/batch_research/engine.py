@@ -32,7 +32,7 @@ from .base import (
 )
 from .batch_engine import BatchBacktestingEngine
 from .batch_result import BatchBacktestResult
-from .statistics.enricher import ResultEnricher, TushareNameProvider
+from .statistics.enricher import ResultEnricher, TushareNameProvider, TushareBenchmarkProvider
 from .task import BacktestResult, TaskStatus
 
 if TYPE_CHECKING:
@@ -61,12 +61,12 @@ class BatchResearchEngine(BaseEngine):
         self._stop_flag: bool = False
         self._results: list[BatchBacktestResult] = []
         # 自动加载 TushareNameProvider（如果配置了 token）
-        _name_provider = TushareNameProvider.from_settings()
+        _name_provider      = TushareNameProvider.from_settings()
+        _benchmark_provider = TushareBenchmarkProvider.from_settings()
         self._enricher: ResultEnricher = ResultEnricher(
-            name_provider=_name_provider
+            name_provider=_name_provider,
+            benchmark_provider=_benchmark_provider,
         )
-        if _name_provider is not None:
-            self.write_log("已加载 TushareNameProvider，股票名称和行业将自动填充")
 
     # ------------------------------------------------------------------ #
     #  Public configuration API (called from Widget)
@@ -111,9 +111,13 @@ class BatchResearchEngine(BaseEngine):
         self._results.clear()
 
         # 每次回测前重新读 token，保证配置对话框填完后立即生效
-        _provider = TushareNameProvider.from_settings()
-        self._enricher = ResultEnricher(name_provider=_provider)
-        if _provider is not None:
+        _name_provider      = TushareNameProvider.from_settings()
+        _benchmark_provider = TushareBenchmarkProvider.from_settings()
+        self._enricher = ResultEnricher(
+            name_provider=_name_provider,
+            benchmark_provider=_benchmark_provider,
+        )
+        if _name_provider is not None:
             self.write_log("已加载 TushareNameProvider，将自动填充股票名称和行业")
 
         self._thread = threading.Thread(

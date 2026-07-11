@@ -217,19 +217,144 @@ class TradeMetrics:
 
     @staticmethod
     def calc_avg_holding(trades) -> float | None:
-        return None  # TODO: L3
+        """平均每笔持仓天数（多头开仓到平仓配对计算）。"""
+        if not trades:
+            return None
+        try:
+            from vnpy.trader.constant import Direction, Offset
+            # 按时间排序
+            sorted_trades = sorted(trades, key=lambda t: t.datetime)
+            holding_days = []
+            open_stack = []  # 存放未平仓的开仓记录
+
+            for trade in sorted_trades:
+                offset = getattr(trade, 'offset', None)
+                if offset is None:
+                    continue
+                offset_val = offset.value if hasattr(offset, 'value') else str(offset)
+                if offset_val in ('开', 'OPEN', 'Open'):
+                    open_stack.append(trade)
+                elif offset_val in ('平', '平今', '平昨', 'CLOSE', 'Close', 'CLOSETODAY', 'CLOSEYESTERDAY'):
+                    if open_stack:
+                        open_trade = open_stack.pop(0)
+                        delta = trade.datetime - open_trade.datetime
+                        holding_days.append(delta.total_seconds() / 86400)
+
+            if not holding_days:
+                return None
+            return round(sum(holding_days) / len(holding_days), 2)
+        except Exception:
+            return None
 
     @staticmethod
     def calc_trade_win_rate(trades) -> float | None:
-        return None  # TODO: L3
+        """逐笔胜率（盈利笔数 / 总配对笔数 × 100）。"""
+        if not trades:
+            return None
+        try:
+            from vnpy.trader.constant import Offset
+            sorted_trades = sorted(trades, key=lambda t: t.datetime)
+            open_stack = []
+            wins = 0
+            total = 0
+
+            for trade in sorted_trades:
+                offset = getattr(trade, 'offset', None)
+                if offset is None:
+                    continue
+                offset_val = offset.value if hasattr(offset, 'value') else str(offset)
+                direction = getattr(trade, 'direction', None)
+                dir_val = direction.value if hasattr(direction, 'value') else str(direction)
+
+                if offset_val in ('开', 'OPEN', 'Open'):
+                    open_stack.append(trade)
+                elif offset_val in ('平', '平今', '平昨', 'CLOSE', 'Close', 'CLOSETODAY', 'CLOSEYESTERDAY'):
+                    if open_stack:
+                        open_trade = open_stack.pop(0)
+                        # 多头：平仓价 > 开仓价 为盈利；空头相反
+                        open_dir = getattr(open_trade, 'direction', None)
+                        open_dir_val = open_dir.value if hasattr(open_dir, 'value') else str(open_dir)
+                        if open_dir_val in ('多', 'LONG', 'Long'):
+                            profit = trade.price - open_trade.price
+                        else:
+                            profit = open_trade.price - trade.price
+                        total += 1
+                        if profit > 0:
+                            wins += 1
+
+            if total == 0:
+                return None
+            return round(wins / total * 100, 2)
+        except Exception:
+            return None
 
     @staticmethod
     def calc_avg_profit_trade(trades) -> float | None:
-        return None  # TODO: L3
+        """平均盈利笔金额（元）。"""
+        if not trades:
+            return None
+        try:
+            sorted_trades = sorted(trades, key=lambda t: t.datetime)
+            open_stack = []
+            profits = []
+
+            for trade in sorted_trades:
+                offset = getattr(trade, 'offset', None)
+                if offset is None:
+                    continue
+                offset_val = offset.value if hasattr(offset, 'value') else str(offset)
+                if offset_val in ('开', 'OPEN', 'Open'):
+                    open_stack.append(trade)
+                elif offset_val in ('平', '平今', '平昨', 'CLOSE', 'Close', 'CLOSETODAY', 'CLOSEYESTERDAY'):
+                    if open_stack:
+                        open_trade = open_stack.pop(0)
+                        open_dir = getattr(open_trade, 'direction', None)
+                        open_dir_val = open_dir.value if hasattr(open_dir, 'value') else str(open_dir)
+                        size = getattr(open_trade, 'volume', 1.0)
+                        if open_dir_val in ('多', 'LONG', 'Long'):
+                            pnl = (trade.price - open_trade.price) * size
+                        else:
+                            pnl = (open_trade.price - trade.price) * size
+                        if pnl > 0:
+                            profits.append(pnl)
+
+            return round(sum(profits) / len(profits), 2) if profits else None
+        except Exception:
+            return None
 
     @staticmethod
     def calc_avg_loss_trade(trades) -> float | None:
-        return None  # TODO: L3
+        """平均亏损笔金额（元，返回负数）。"""
+        if not trades:
+            return None
+        try:
+            sorted_trades = sorted(trades, key=lambda t: t.datetime)
+            open_stack = []
+            losses = []
+
+            for trade in sorted_trades:
+                offset = getattr(trade, 'offset', None)
+                if offset is None:
+                    continue
+                offset_val = offset.value if hasattr(offset, 'value') else str(offset)
+                if offset_val in ('开', 'OPEN', 'Open'):
+                    open_stack.append(trade)
+                elif offset_val in ('平', '平今', '平昨', 'CLOSE', 'Close', 'CLOSETODAY', 'CLOSEYESTERDAY'):
+                    if open_stack:
+                        open_trade = open_stack.pop(0)
+                        open_dir = getattr(open_trade, 'direction', None)
+                        open_dir_val = open_dir.value if hasattr(open_dir, 'value') else str(open_dir)
+                        size = getattr(open_trade, 'volume', 1.0)
+                        if open_dir_val in ('多', 'LONG', 'Long'):
+                            pnl = (trade.price - open_trade.price) * size
+                        else:
+                            pnl = (open_trade.price - trade.price) * size
+                        if pnl < 0:
+                            losses.append(pnl)
+
+            return round(sum(losses) / len(losses), 2) if losses else None
+        except Exception:
+            return None
 
 
 class CapitalMetrics:
