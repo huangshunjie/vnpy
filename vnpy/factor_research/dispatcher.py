@@ -156,46 +156,94 @@ class FactorResearchEngine(BaseEngine):
             if self._stop_flag:
                 self.put_finished(); return
 
-            valid_results = [lr for lr in load_results if lr.success]
+            valid_results   = [lr for lr in load_results if lr.success]
             momentum_window = self._parse_momentum_window(fp.factor_name)
             factor_name_str = fp.factor_name or f"momentum_{momentum_window}"
 
-            # ── 阶段 2：因子概览（每合约独立发，不合并）─────────────────
+            # ── 阶段 2：因子概览（每合约独立发，串行，IO 轻量）─────────────
             for lr in valid_results:
-                if self._stop_flag: break
+                if self._stop_flag:
+                    break
                 df = self.data_engine.get_bars(lr.cache_key)
-                if df is None: continue
+                if df is None:
+                    continue
                 summary = DataEngine.compute_overview(lr.vt_symbol, lr.interval, df)
                 self.event_engine.put(Event(
                     EVENT_FACTOR_PLOT_READY, {"tab": "overview", "payload": summary}
                 ))
-                self.write_log(f"概览计算完成：{lr.vt_symbol} {lr.count} bars")
 
             if self._stop_flag:
                 self.put_finished(); return
 
-            # ── 阶段 3：IC 统计 + IC 时序（收集 → 截面均值 → 发一次）──────
-            ic_list: list[IcStats] = []
-            total_ic = len(valid_results)
-            for i, lr in enumerate(valid_results, 1):
-                if self._stop_flag: break
-                df = self.data_engine.get_bars(lr.cache_key)
-                if df is None: continue
-                self.put_progress(
-                    f"IC 计算：{lr.vt_symbol} [{i}/{total_ic}]"
-                )
-                ic_stats = self.ic_engine.compute(
-                    df, vt_symbol=lr.vt_symbol,
+            # ── 阶段 3~5：IC / Decay / Quantile — 多进程并行 ─────────────
+            from .engine.parallel_worker import ParallelWorker, SymbolTask
+
+            df_map: dict = {
+                lr.vt_symbol: self.data_engine.get_bars(lr.cache_key)
+                for lr in valid_results
+                if self.data_engine.get_bars(lr.cache_key) is not None
+            }
+            tasks: dict = {
+                sym: SymbolTask(
+                    vt_symbol=sym,
                     factor_name=factor_name_str,
                     momentum_window=momentum_window,
                     lag=fp.lag,
+                    n_quantiles=fp.n_quantiles,
+                    max_lag=fp.max_lag,
                 )
-                ic_list.append(ic_stats)
-                self.write_log(
-                    f"IC [{i}/{total_ic}] {lr.vt_symbol}  "
-                    f"IC={ic_stats.ic_mean:.4f}  ICIR={ic_stats.icir:.4f}"
-                )
+                for sym in df_map
+            }
 
+            total_syms = len(tasks)
+            worker = ParallelWorker()
+            self.write_log(
+                f"启动并行计算：{total_syms} 只股票  "
+                f"进程数={worker.max_workers}  "
+                f"向量化模式"
+            )
+
+            def _progress(done: int, total: int, sym: str) -> None:
+                self.put_progress(
+                    f"并行计算进度：{done}/{total}  最新完成：{sym}"
+                )
+                self.write_log(f"[{done}/{total}] 完成：{sym}")
+
+            parallel_results = worker.run_batch(
+                df_map=df_map,
+                tasks=tasks,
+                stop_flag_fn=lambda: self._stop_flag,
+                progress_cb=_progress,
+            )
+
+            if self._stop_flag:
+                self.put_finished(); return
+
+            # 分拣结果
+            ic_list:    list = []
+            decay_list: list = []
+            q_list:     list = []
+
+            ok_count  = 0
+            err_count = 0
+            for res in parallel_results:
+                if res.success:
+                    ok_count += 1
+                    if res.ic_stats is not None:
+                        ic_list.append(res.ic_stats)
+                    if res.decay is not None:
+                        decay_list.append(res.decay)
+                    if res.quantile is not None:
+                        q_list.append(res.quantile)
+                else:
+                    err_count += 1
+                    self.write_log(f"  ✗ {res.vt_symbol}: {res.error[:80]}")
+
+            self.write_log(
+                f"并行计算完成：成功 {ok_count}  失败 {err_count}"
+            )
+
+            # ── IC 合并 & 发布 ────────────────────────────────────────────
             merged_ic = merge_ic(ic_list)
             if merged_ic is not None:
                 self.event_engine.put(Event(
@@ -209,42 +257,13 @@ class FactorResearchEngine(BaseEngine):
                     f"IC={merged_ic.ic_mean:.4f}  ICIR={merged_ic.icir:.4f}"
                 )
 
-            # Send per-symbol IC list for correlation / redundancy analysis
             if ic_list:
                 self.event_engine.put(Event(
                     EVENT_FACTOR_PLOT_READY,
                     {"tab": "correlation", "payload": ic_list},
                 ))
 
-            if self._stop_flag:
-                self.put_finished(); return
-
-            # ── 阶段 4：IC Decay（收集 → 截面均值 → 发一次）──────────────
-            decay_list: list[DecayResult] = []
-            total_decay = len(valid_results)
-            for i, lr in enumerate(valid_results, 1):
-                if self._stop_flag: break
-                df = self.data_engine.get_bars(lr.cache_key)
-                if df is None: continue
-
-                def _progress(cur: int, tot: int, sym: str = lr.vt_symbol) -> None:
-                    self.put_progress(
-                        f"IC Decay：{sym} [{i}/{total_decay}] lag={cur}/{tot}"
-                    )
-
-                decay_result = self.decay_engine.compute(
-                    df, vt_symbol=lr.vt_symbol,
-                    factor_name=factor_name_str,
-                    momentum_window=momentum_window,
-                    max_lag=fp.max_lag,
-                    progress_callback=_progress,
-                )
-                decay_list.append(decay_result)
-                self.write_log(
-                    f"IC Decay [{i}/{total_decay}] {lr.vt_symbol}  "
-                    f"best_lag={decay_result.best_lag}"
-                )
-
+            # ── Decay 合并 & 发布 ─────────────────────────────────────────
             merged_decay = merge_decay(decay_list)
             if merged_decay is not None:
                 self.event_engine.put(Event(
@@ -258,29 +277,7 @@ class FactorResearchEngine(BaseEngine):
             if self._stop_flag:
                 self.put_finished(); return
 
-            # ── 阶段 5：分层收益（收集 → 截面均值 → 发一次）──────────────
-            q_list: list[QuantileResult] = []
-            total_q = len(valid_results)
-            for i, lr in enumerate(valid_results, 1):
-                if self._stop_flag: break
-                df = self.data_engine.get_bars(lr.cache_key)
-                if df is None: continue
-                self.put_progress(
-                    f"分层收益：{lr.vt_symbol} [{i}/{total_q}]"
-                )
-                q_result = self.quantile_engine.compute(
-                    df, vt_symbol=lr.vt_symbol,
-                    factor_name=factor_name_str,
-                    momentum_window=momentum_window,
-                    lag=fp.lag,
-                    n_quantiles=fp.n_quantiles,
-                )
-                q_list.append(q_result)
-                self.write_log(
-                    f"分层收益 [{i}/{total_q}] {lr.vt_symbol}  "
-                    f"单调性={q_result.monotonicity_score:.4f}"
-                )
-
+            # ── Quantile 合并 & 发布 ──────────────────────────────────────
             merged_q = merge_quantile(q_list)
             if merged_q is not None:
                 self.event_engine.put(Event(
@@ -293,9 +290,37 @@ class FactorResearchEngine(BaseEngine):
                     f"L-S年化={merged_q.long_short_annualized:.4f}"
                 )
 
-            # 阶段 6～N 在此追加
+            # ── 阶段 6：因子稳定性（直接复用 merged_ic 的 ic_series）────────
+            if merged_ic is not None and merged_ic.ic_series is not None:
+                if not self._stop_flag:
+                    self.event_engine.put(Event(
+                        EVENT_FACTOR_PLOT_READY,
+                        {"tab": "ic_series", "payload": merged_ic},
+                    ))
+                    self.write_log("稳定性分析完成（月度热力图 / 年度IC / ACF）")
+
+            # ── 阶段 7：综合评分 ─────────────────────────────────────────
+            if not self._stop_flag and merged_ic is not None:
+                try:
+                    from .engine.score_engine import ScoreEngine
+                    if self.score_engine is None:
+                        self.score_engine = ScoreEngine()
+                    fs = self.score_engine.compute_score(
+                        ic_stats=merged_ic,
+                        quantile_result=merged_q,
+                    )
+                    self.event_engine.put(Event(
+                        EVENT_FACTOR_PLOT_READY,
+                        {"tab": "score", "payload": fs},
+                    ))
+                    self.write_log(
+                        f"综合评分完成：{fs.total_score:.1f} 分（{fs.grade} 级）"
+                    )
+                except Exception as _exc:
+                    self.write_log(f"综合评分计算失败（不影响其他结果）：{_exc}")
 
             self.put_finished()
+
 
         except Exception as exc:
             self.write_error(f"计算异常：{exc}")

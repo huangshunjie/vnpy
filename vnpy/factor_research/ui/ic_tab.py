@@ -106,7 +106,7 @@ class IcTab(QtWidgets.QWidget):
     def _build_stats_group(self) -> QtWidgets.QGroupBox:
         group = QtWidgets.QGroupBox("IC / RankIC 统计对比")
         layout = QtWidgets.QVBoxLayout(group)
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(4, 12, 4, 4)
 
         self.stats_table = QtWidgets.QTableWidget(len(_ROWS), len(_COL_HEADERS))
         self.stats_table.setHorizontalHeaderLabels(_COL_HEADERS)

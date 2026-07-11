@@ -55,7 +55,9 @@ class LeftPanel(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._all_items: list[BarOverviewItem] = []
+        self._settings = QtCore.QSettings("VeighNa", "FactorResearch")
         self._init_ui()
+        self._load_settings()
 
     # ------------------------------------------------------------------ #
     #  UI 构建
@@ -342,6 +344,7 @@ class LeftPanel(QtWidgets.QWidget):
     def _on_run_clicked(self) -> None:
         if not self._validate():
             return
+        self._save_settings()
         self.btn_run.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.run_requested.emit(self._collect_params())
@@ -383,3 +386,70 @@ class LeftPanel(QtWidgets.QWidget):
             "n_quantiles":    self.spin_n_quantiles.value(),
             "max_lag":        self.spin_max_lag.value(),
         }
+
+    # ------------------------------------------------------------------ #
+    #  参数持久化
+    # ------------------------------------------------------------------ #
+
+    def _save_settings(self) -> None:
+        s = self._settings
+        s.setValue("factor_type",   self.combo_factor_type.currentIndex())
+        s.setValue("factor_name",   self.edit_factor_name.text().strip())
+        s.setValue("frequency",     self.combo_frequency.currentIndex())
+        s.setValue("date_start",    self.date_start.date().toString("yyyy-MM-dd"))
+        s.setValue("date_end",      self.date_end.date().toString("yyyy-MM-dd"))
+        s.setValue("normalization", self.combo_norm.currentIndex())
+        s.setValue("neutralization",self.combo_neutral.currentIndex())
+        s.setValue("lag",           self.spin_lag.value())
+        s.setValue("n_quantiles",   self.spin_n_quantiles.value())
+        s.setValue("max_lag",       self.spin_max_lag.value())
+        s.setValue("search_text",   self.edit_search.text().strip())
+        s.sync()
+
+    def _load_settings(self) -> None:
+        s = self._settings
+        if not s.contains("factor_name"):
+            return
+
+        idx = s.value("factor_type", 0, type=int)
+        if 0 <= idx < self.combo_factor_type.count():
+            self.combo_factor_type.setCurrentIndex(idx)
+
+        self.edit_factor_name.setText(s.value("factor_name", "", type=str))
+
+        idx = s.value("frequency", 0, type=int)
+        if 0 <= idx < self.combo_frequency.count():
+            self.combo_frequency.setCurrentIndex(idx)
+
+        date_s = s.value("date_start", "", type=str)
+        if date_s:
+            d = QtCore.QDate.fromString(date_s, "yyyy-MM-dd")
+            if d.isValid():
+                self.date_start.setDate(d)
+
+        date_e = s.value("date_end", "", type=str)
+        if date_e:
+            d = QtCore.QDate.fromString(date_e, "yyyy-MM-dd")
+            if d.isValid():
+                self.date_end.setDate(d)
+
+        idx = s.value("normalization", 0, type=int)
+        if 0 <= idx < self.combo_norm.count():
+            self.combo_norm.setCurrentIndex(idx)
+
+        idx = s.value("neutralization", 0, type=int)
+        if 0 <= idx < self.combo_neutral.count():
+            self.combo_neutral.setCurrentIndex(idx)
+
+        lag = s.value("lag", 5, type=int)
+        self.spin_lag.setValue(max(self.spin_lag.minimum(), min(self.spin_lag.maximum(), lag)))
+
+        nq = s.value("n_quantiles", 5, type=int)
+        self.spin_n_quantiles.setValue(max(2, min(10, nq)))
+
+        ml = s.value("max_lag", 20, type=int)
+        self.spin_max_lag.setValue(max(self.spin_max_lag.minimum(), min(self.spin_max_lag.maximum(), ml)))
+
+        search = s.value("search_text", "", type=str)
+        if search:
+            self.edit_search.setText(search)

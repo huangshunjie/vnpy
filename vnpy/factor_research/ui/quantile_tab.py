@@ -31,7 +31,13 @@ from vnpy.trader.ui import QtCore, QtWidgets
 from ..model import QuantileResult
 
 
-_Q_COLORS = ["#AECBF0", "#7FAFD9", "#5B9BD5", "#3A7AB5", "#1A5794"]
+_Q_COLORS = [
+    "#4FC3F7",   # Q1 天蓝
+    "#81C784",   # Q2 草绿
+    "#FFD54F",   # Q3 琥珀黄
+    "#FF8A65",   # Q4 珊瑚橙
+    "#CE93D8",   # Q5 紫
+]
 _LS_COLOR  = "#E53935"
 _POS_COLOR = "#5B9BD5"
 _NEG_COLOR = "#ED7D31"

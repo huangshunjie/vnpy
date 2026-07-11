@@ -372,8 +372,6 @@ class FactorResearchWidget(QtWidgets.QMainWindow):
 
         self.stability_tab.clear()
 
-        self.correlation_tab.clear()
-        self.redundancy_tab.clear()
         self.factor_engine.run(params)
 
 
@@ -557,6 +555,13 @@ class FactorResearchWidget(QtWidgets.QMainWindow):
             for ic_item in payload:
                 self.correlation_tab.feed_ic(ic_item)
                 self.redundancy_tab.feed_ic(ic_item)
+
+        elif tab_name == "score":
+            from ..model import FactorScore
+            if isinstance(payload, FactorScore):
+                self.score_tab._factor_score = payload
+                self.score_tab._render(payload)
+                self.report_tab.feed_score(payload)
 
 
     # ------------------------------------------------------------------ #

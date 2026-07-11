@@ -134,7 +134,6 @@ class CorrelationTab(QtWidgets.QWidget):
     def _build_plots(self) -> None:
         pg.setConfigOption("antialias", True)
         self._heat_plot = self._glw.addPlot(row=0, col=0, title="IC 序列 Pearson 相关矩阵")
-        self._heat_plot.setAspectLocked(True)
         self._heat_plot.showGrid(x=False, y=False)
         self._heat_plot.getAxis("bottom").setStyle(
             tickFont=pg.QtGui.QFont("monospace", 8)
@@ -142,6 +141,8 @@ class CorrelationTab(QtWidgets.QWidget):
         self._heat_plot.getAxis("left").setStyle(
             tickFont=pg.QtGui.QFont("monospace", 8)
         )
+        self._heat_plot.getAxis("bottom").setHeight(48)
+        self._heat_plot.invertY(True)
 
         self._line_plot = self._glw.addPlot(row=0, col=1, title="IC 时序对比")
         self._line_plot.setLabel("bottom", "时间")
@@ -267,8 +268,8 @@ class CorrelationTab(QtWidgets.QWidget):
         y_ticks  = [(float(i) + 0.5, short[i]) for i in range(n)]
         self._heat_plot.getAxis("bottom").setTicks([x_ticks])
         self._heat_plot.getAxis("left").setTicks([y_ticks])
-        self._heat_plot.setXRange(0, n, padding=0.02)
-        self._heat_plot.setYRange(0, n, padding=0.02)
+        self._heat_plot.setXRange(0, n, padding=0.05)
+        self._heat_plot.setYRange(0, n, padding=0.05)
 
         # colour scale legend
         leg = pg.TextItem(

@@ -197,24 +197,37 @@ def merge_quantile(results: list[QuantileResult]) -> QuantileResult | None:
     ls_ann = _nm([r.long_short_annualized  for r in valid])
 
     # Time-series merging
+    #
+    # 正确方法：对每档的原始收益率序列（不连续时序）先做截面对齐均值，
+    # 再从均值收益率重新 cumprod 得到累计曲线。
+    # 不能直接对各股的累计曲线做时序均值——各股时间轴稀疏不一致，
+    # skipna 均值会因每个时间点的参与股票数不同而产生严重偏差。
     cum_ret: dict[str, pd.Series] = {}
     q_ret:   dict[str, pd.Series] = {}
     for ql in q_labels:
-        cum_srs = [r.cumulative_returns.get(ql) for r in valid
-                   if r.cumulative_returns.get(ql) is not None
-                   and not r.cumulative_returns[ql].empty]
-        if cum_srs:
-            cum_ret[ql] = _align_nanmean(cum_srs)
-
         ret_srs = [r.quantile_returns.get(ql) for r in valid
                    if r.quantile_returns.get(ql) is not None
                    and not r.quantile_returns[ql].empty]
         if ret_srs:
-            q_ret[ql] = _align_nanmean(ret_srs)
+            mean_ret = _align_nanmean(ret_srs)
+            q_ret[ql] = mean_ret
+            # 从均值收益率重建累计收益（cumprod），而非对累计曲线取均值
+            cum_ret[ql] = (1 + mean_ret).cumprod() - 1
 
-    ls_list = [r.long_short_series for r in valid
-               if r.long_short_series is not None and not r.long_short_series.empty]
-    ls_series = _align_nanmean(ls_list) if ls_list else None
+    ls_list = [r.quantile_returns.get(q_labels[-1]) for r in valid
+               if r.quantile_returns.get(q_labels[-1]) is not None
+               and not r.quantile_returns[q_labels[-1]].empty]
+    short_list = [r.quantile_returns.get(q_labels[0]) for r in valid
+                  if r.quantile_returns.get(q_labels[0]) is not None
+                  and not r.quantile_returns[q_labels[0]].empty]
+
+    ls_series: pd.Series | None = None
+    if ls_list and short_list:
+        # L-S = 多头均值收益 - 空头均值收益，再重建累计曲线
+        long_mean  = _align_nanmean(ls_list)
+        short_mean = _align_nanmean(short_list)
+        ls_mean    = _align_nanmean([long_mean, -short_mean])
+        ls_series  = (1 + ls_mean).cumprod() - 1
 
     return QuantileResult(
         vt_symbol=_label(n, symbols),
