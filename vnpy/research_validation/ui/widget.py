@@ -58,6 +58,7 @@ class ValidationWidget(QtWidgets.QMainWindow):
         self.main_engine  = main_engine
         self.event_engine = event_engine
         self._init_ui()
+        self._load_factor_history()
         self._register_events()
 
     # ------------------------------------------------------------------ #
@@ -153,11 +154,11 @@ class ValidationWidget(QtWidgets.QMainWindow):
         v.addWidget(sep3)
 
         v.addWidget(self._lbl("启用验证模块："))
-        self._chk_wf  = self._checkbox("Walk Forward")
-        self._chk_oos = self._checkbox("OOS Testing")
-        self._chk_reg = self._checkbox("Regime Detection")
-        self._chk_sta = self._checkbox("Stability Test")
-        self._chk_bia = self._checkbox("Bias Detection")
+        self._chk_wf  = self._checkbox("滚动验证 Walk Forward")
+        self._chk_oos = self._checkbox("样本外测试 OOS Testing")
+        self._chk_reg = self._checkbox("市场状态 Regime Detection")
+        self._chk_sta = self._checkbox("稳定性测试 Stability Test")
+        self._chk_bia = self._checkbox("偏差检测 Bias Detection")
         for chk in (self._chk_wf, self._chk_oos,
                     self._chk_reg, self._chk_sta, self._chk_bia):
             v.addWidget(chk)
@@ -229,12 +230,12 @@ class ValidationWidget(QtWidgets.QMainWindow):
         self.report_tab      = ReportTab(self)
 
         tabs.addTab(self.overview_tab,    "Overview（总览）")
-        tabs.addTab(self.walkforward_tab, "Walk Forward")
-        tabs.addTab(self.oos_tab,         "OOS Testing")
-        tabs.addTab(self.regime_tab,      "Regime Detection")
-        tabs.addTab(self.stability_tab,   "Stability Test")
-        tabs.addTab(self.bias_tab,        "Bias Detection")
-        tabs.addTab(self.report_tab,      "Report")
+        tabs.addTab(self.walkforward_tab, "滚动验证 Walk Forward")
+        tabs.addTab(self.oos_tab,         "样本外测试 OOS Testing")
+        tabs.addTab(self.regime_tab,      "市场状态 Regime Detection")
+        tabs.addTab(self.stability_tab,   "稳定性测试 Stability Test")
+        tabs.addTab(self.bias_tab,        "偏差检测 Bias Detection")
+        tabs.addTab(self.report_tab,      "报告 Report")
         return tabs
 
     def _build_log_bar(self):
@@ -330,6 +331,7 @@ class ValidationWidget(QtWidgets.QMainWindow):
             self.bias_tab.update_summary(bias_summary)
         # Overview -> OverviewTab
         self.overview_tab.update_result(result)
+        self.report_tab.update_result(result)
         # 综合评分日志
         score = getattr(result, 'overall_score', None)
         is_real = getattr(result, 'is_real_alpha', False)
@@ -439,3 +441,38 @@ class ValidationWidget(QtWidgets.QMainWindow):
     def closeEvent(self, event) -> None:
         self._unregister_events()
         super().closeEvent(event)
+
+    def _load_factor_history(self) -> None:
+        """从因子研究工作台的 QSettings 读取历史因子列表，填充下拉框并自动带入日期。"""
+        from vnpy.trader.ui import QtCore as _QtCore
+        s = _QtCore.QSettings("VeighNa", "FactorResearch")
+
+        # 历史因子列表
+        history = s.value("factor_history", [], type=list) or []
+        if not isinstance(history, list):
+            history = []
+
+        # 当前因子名（上次在因子研究工作台运行的）
+        last_name = s.value("factor_name", "", type=str)
+
+        self._cmb_factor.clear()
+        if history:
+            for name in history:
+                self._cmb_factor.addItem(name)
+            # 让上次运行的因子默认选中
+            if last_name and last_name in history:
+                self._cmb_factor.setCurrentText(last_name)
+        else:
+            self._cmb_factor.addItem("（尚未运行任何因子，请先到因子研究工作台运行）")
+
+        # 自动带入日期
+        date_s = s.value("date_start", "", type=str)
+        date_e = s.value("date_end",   "", type=str)
+        if date_s:
+            d = _QtCore.QDate.fromString(date_s, "yyyy-MM-dd")
+            if d.isValid():
+                self._dte_start.setDate(d)
+        if date_e:
+            d = _QtCore.QDate.fromString(date_e, "yyyy-MM-dd")
+            if d.isValid():
+                self._dte_end.setDate(d)

@@ -404,6 +404,16 @@ class LeftPanel(QtWidgets.QWidget):
         s.setValue("n_quantiles",   self.spin_n_quantiles.value())
         s.setValue("max_lag",       self.spin_max_lag.value())
         s.setValue("search_text",   self.edit_search.text().strip())
+
+        # 将本次因子名追加到历史列表，供验证体系读取
+        name = self.edit_factor_name.text().strip()
+        if name:
+            existing = s.value("factor_history", [], type=list) or []
+            if not isinstance(existing, list):
+                existing = []
+            if name not in existing:
+                existing.append(name)
+            s.setValue("factor_history", existing)
         s.sync()
 
     def _load_settings(self) -> None:
