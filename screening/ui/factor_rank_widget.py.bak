@@ -1,0 +1,64 @@
+﻿"""
+screening/ui/factor_rank_widget.py
+
+Factor Rank Widget 鈥?鍥犲瓙鎺掑簭閰嶇疆闈㈡澘锛圥hase 4锛夈€?
+"""
+
+from __future__ import annotations
+from typing import Optional
+
+from vnpy.trader.ui import QtWidgets, QtCore
+
+from ..constant import ScoreMethod, RankDirection
+from ..model.factor_score import FactorRankConfig, FactorWeight
+
+_PANEL  = "#181825"
+_PANEL2 = "#11111b"
+_BORDER = "#45475a"
+_FG     = "#cdd6f4"
+_MUT    = "#6c7086"
+_ORG    = "#fab387"
+_GRN    = "#a6e3a1"
+_BLU    = "#89b4fa"
+_YLW    = "#f9e2af"
+_RED    = "#f38ba8"
+_MAV    = "#cba6f7"
+
+_LABEL   = f"color:{_FG};font-size:11px;"
+_INPUT   = (f"background:{_PANEL2};color:{_FG};border:1px solid {_BORDER};"
+            f"border-radius:3px;padding:3px 6px;font-size:11px;")
+_SECTION = f"color:{_ORG};font-size:11px;font-weight:bold;"
+
+_BUILTIN_FACTORS = [
+    "MOM_1D","MOM_5D","MOM_20D","MOM_60D",
+    "REV_1D","REV_5D","VOL_5D","VOL_20D",
+    "RSI_14","RSI_28","MACD_SIGNAL","BB_WIDTH",
+    "PE_RANK","PB_RANK","ROE_RANK","EPS_SURPRISE",
+    "NETFLOW_5D","LARGE_ORDER_RATIO","ILLIQ_5D","AMIHUD_5D",
+    "momentum","quality","value","low_vol",
+]
+
+_METHOD_LABELS = {
+    ScoreMethod.MANUAL:       "鎵嬪姩鏉冮噸",
+    ScoreMethod.EQUAL_WEIGHT: "绛夋潈",
+    ScoreMethod.IC_WEIGHT:    "IC 鍔犳潈",
+    ScoreMethod.ICIR_WEIGHT:  "ICIR 鍔犳潈",
+}
+
+_DIR_LABELS = {
+    RankDirection.DESC: "鈫?瓒婂ぇ瓒婂ソ",
+    RankDirection.ASC:  "鈫?瓒婂皬瓒婂ソ",
+}
+
+
+def _small_btn(text: str, color: str = _MUT) -> QtWidgets.QPushButton:
+    b = QtWidgets.QPushButton(text)
+    b.setStyleSheet(
+        f"QPushButton{{background:#313244;color:{color};"
+        f"border:1px solid {_BORDER};border-radius:3px;"
+        f"padding:2px 8px;font-size:10px;}}"
+        f"QPushButton:hover{{background:#45475a;}}"
+    )
+    b.setMaximumHeight(22)
+    return b
+
