@@ -1,4 +1,4 @@
-"""
+﻿"""
 platform_engineering/ui/monitor.py
 ObservabilityTab — Phase 2
 四层实时指标表格 + 告警管理 + 规则列表
@@ -96,7 +96,7 @@ class AlertTable(QWidget):
         tb.addWidget(self._btn_resolve)
         tb.addStretch()
         self._count_lbl = QLabel("0 \u6761")
-        self._count_lbl.setStyleSheet("font-size:11px;color:#8c8c8c;")
+        self._count_lbl.setStyleSheet("font-size:14px;color:#8c8c8c;")
         tb.addWidget(self._count_lbl)
         root.addLayout(tb)
 
@@ -210,7 +210,7 @@ class ObservabilityTab(QWidget):
         btn.setFixedSize(68, 26)
         btn.setStyleSheet(
             "background:#4a6cf7;color:#fff;border-radius:4px;"
-            "font-size:12px;border:none;")
+            "font-size:14px;border:none;")
         btn.clicked.connect(self._refresh)
         hdr.addWidget(btn)
         root.addLayout(hdr)

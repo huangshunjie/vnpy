@@ -1,4 +1,4 @@
-"""
+﻿"""
 platform_engineering/ui/task.py
 TaskTab — Phase 3
 任务队列列表 + Worker 状态面板 + 调度管理
@@ -166,7 +166,7 @@ class TaskList(QWidget):
         tb.addWidget(self._search)
         tb.addStretch()
         self._count_lbl = QLabel("0 \u6761")
-        self._count_lbl.setStyleSheet("font-size:11px;color:#8c8c8c;")
+        self._count_lbl.setStyleSheet("font-size:14px;color:#8c8c8c;")
         tb.addWidget(self._count_lbl)
         root.addLayout(tb)
         self._table = QTableWidget(0, 7)
@@ -392,13 +392,13 @@ class TaskTab(QWidget):
         title.setStyleSheet("font-size:16px;font-weight:bold;color:#1a1f36;")
         hdr.addWidget(title); hdr.addStretch()
         self._stats_lbl = QLabel("")
-        self._stats_lbl.setStyleSheet("font-size:11px;color:#8c8c8c;")
+        self._stats_lbl.setStyleSheet("font-size:14px;color:#8c8c8c;")
         hdr.addWidget(self._stats_lbl)
         btn = QPushButton("\U0001f504 \u5237\u65b0")
         btn.setFixedSize(68, 26)
         btn.setStyleSheet(
             "background:#4a6cf7;color:#fff;border-radius:4px;"
-            "font-size:12px;border:none;")
+            "font-size:14px;border:none;")
         btn.clicked.connect(self._refresh)
         hdr.addWidget(btn)
         root.addLayout(hdr)
@@ -411,7 +411,7 @@ class TaskTab(QWidget):
         self._sub.addTab(self._sched_panel,  "\U0001f551  \u8c03\u5ea6\u7ba1\u7406")
         root.addWidget(self._sub, 1)
         self._status = QLabel("\u5c31\u7eea")
-        self._status.setStyleSheet("font-size:11px;color:#6c757d;")
+        self._status.setStyleSheet("font-size:14px;color:#6c757d;")
         root.addWidget(self._status)
 
     def _refresh(self):

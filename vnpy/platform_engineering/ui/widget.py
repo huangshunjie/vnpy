@@ -1,4 +1,4 @@
-"""
+﻿"""
 platform_engineering/ui/widget.py
 PlatformEngineeringWidget — 主窗口
 """
@@ -90,7 +90,7 @@ class PlatformEngineeringWidget(QWidget):
 
         self._health_badge = QLabel("● GREEN")
         self._health_badge.setStyleSheet(
-            "color:#52c41a;font-size:12px;background:transparent;"
+            "color:#52c41a;font-size:14px;background:transparent;"
             "padding:2px 10px;border:1px solid #52c41a;border-radius:10px;")
         lay.addWidget(self._health_badge)
 
@@ -98,7 +98,7 @@ class PlatformEngineeringWidget(QWidget):
         btn.setFixedSize(72, 28)
         btn.setStyleSheet(
             "background:#4a6cf7;color:#fff;border-radius:4px;"
-            "font-size:12px;border:none;")
+            "font-size:14px;border:none;")
         btn.clicked.connect(self._refresh_status)
         lay.addWidget(btn)
         return w
@@ -110,11 +110,11 @@ class PlatformEngineeringWidget(QWidget):
         lay = QHBoxLayout(w)
         lay.setContentsMargins(10, 0, 10, 0)
         self._status_lbl = QLabel("就绪")
-        self._status_lbl.setStyleSheet("color:#6c757d;font-size:11px;")
+        self._status_lbl.setStyleSheet("color:#6c757d;font-size:14px;")
         lay.addWidget(self._status_lbl)
         lay.addStretch()
         self._stats_lbl = QLabel("")
-        self._stats_lbl.setStyleSheet("color:#6c757d;font-size:11px;")
+        self._stats_lbl.setStyleSheet("color:#6c757d;font-size:14px;")
         lay.addWidget(self._stats_lbl)
         return w
 
@@ -143,7 +143,7 @@ class PlatformEngineeringWidget(QWidget):
                      "RED": "#ff4d4f"}.get(level, "#52c41a")
             self._health_badge.setText(f"● {level}")
             self._health_badge.setStyleSheet(
-                f"color:{color};font-size:12px;background:transparent;"
+                f"color:{color};font-size:14px;background:transparent;"
                 f"padding:2px 10px;border:1px solid {color};border-radius:10px;")
             self._stats_lbl.setText(
                 f"健康分: {score:.0f}  |  告警: {alerts}"

@@ -1,4 +1,4 @@
-"""
+﻿"""
 platform_engineering/ui/strategy_health.py
 StrategyHealthTab — Phase 5
 策略健康总览 + 四维评分卡 + 指标详情 + 告警建议
@@ -272,7 +272,7 @@ class DetailPanel(QWidget):
         hdr.addWidget(self._title); hdr.addStretch()
         self._status_badge = QLabel("")
         self._status_badge.setStyleSheet(
-            "font-size:12px;padding:2px 10px;border-radius:10px;")
+            "font-size:14px;padding:2px 10px;border-radius:10px;")
         hdr.addWidget(self._status_badge)
         root.addLayout(hdr)
 
@@ -336,7 +336,7 @@ class DetailPanel(QWidget):
         self._bar.setStyleSheet(f"background:{color};border-radius:2px;")
         self._status_badge.setText(icon+" "+rec.status.value.upper())
         self._status_badge.setStyleSheet(
-            f"font-size:12px;padding:2px 10px;border-radius:10px;"
+            f"font-size:14px;padding:2px 10px;border-radius:10px;"
             f"background:{color}22;color:{color};border:1px solid {color}44;")
         self._score_lbl.setText(f"\u603b\u5206: {rec.score:.1f}")
         self._score_lbl.setStyleSheet(
@@ -381,13 +381,13 @@ class DetailPanel(QWidget):
             if item.widget(): item.widget().deleteLater()
         if not rec.warnings:
             ok = QLabel("\u2705  \u65e0\u544a\u8b66\uff0c\u7b56\u7565\u8fd0\u884c\u6b63\u5e38")
-            ok.setStyleSheet("color:#52c41a;font-size:12px;padding:4px;")
+            ok.setStyleSheet("color:#52c41a;font-size:14px;padding:4px;")
             self._warn_layout.addWidget(ok)
         else:
             for w in rec.warnings:
                 lbl = QLabel("\u26a0\ufe0f  " + w)
                 lbl.setStyleSheet(
-                    "color:#faad14;font-size:12px;padding:2px 4px;"
+                    "color:#faad14;font-size:14px;padding:2px 4px;"
                     "background:#fffbe6;border-radius:4px;margin-bottom:2px;")
                 lbl.setWordWrap(True)
                 self._warn_layout.addWidget(lbl)
@@ -421,13 +421,13 @@ class StrategyHealthTab(QWidget):
         title.setStyleSheet("font-size:16px;font-weight:bold;color:#1a1f36;")
         hdr.addWidget(title); hdr.addStretch()
         self._stats_lbl = QLabel("")
-        self._stats_lbl.setStyleSheet("font-size:11px;color:#8c8c8c;")
+        self._stats_lbl.setStyleSheet("font-size:14px;color:#8c8c8c;")
         hdr.addWidget(self._stats_lbl)
         btn = QPushButton("\U0001f504 \u5237\u65b0")
         btn.setFixedSize(68, 26)
         btn.setStyleSheet(
             "background:#4a6cf7;color:#fff;border-radius:4px;"
-            "font-size:12px;border:none;")
+            "font-size:14px;border:none;")
         btn.clicked.connect(self._refresh)
         hdr.addWidget(btn)
         root.addLayout(hdr)
@@ -443,7 +443,7 @@ class StrategyHealthTab(QWidget):
         root.addWidget(sp, 1)
 
         self._status_bar = QLabel("\u5c31\u7eea")
-        self._status_bar.setStyleSheet("font-size:11px;color:#6c757d;")
+        self._status_bar.setStyleSheet("font-size:14px;color:#6c757d;")
         root.addWidget(self._status_bar)
 
     def _on_selected(self, sid: str):

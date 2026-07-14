@@ -1,4 +1,4 @@
-"""
+﻿"""
 platform_engineering/ui/security.py
 SecurityTab — Phase 8
 用户管理 + 角色权限矩阵 + 审计日志
@@ -267,7 +267,7 @@ class PermissionPanel(QWidget):
 
         hdr = QHBoxLayout()
         self._title = QLabel("\u9009\u62e9\u7528\u6237\u67e5\u770b\u6743\u9650")
-        self._title.setStyleSheet("font-size:13px;font-weight:bold;color:#1a1f36;")
+        self._title.setStyleSheet("font-size:14px;font-weight:bold;color:#1a1f36;")
         hdr.addWidget(self._title); hdr.addStretch()
         self._btn_save = QPushButton("\U0001f4be  \u4fdd\u5b58\u6743\u9650")
         self._btn_save.setFixedHeight(26)
@@ -363,7 +363,7 @@ class AuditPanel(QWidget):
         tb.addWidget(self._success_combo)
         tb.addStretch()
         self._count_lbl = QLabel("0 \u6761")
-        self._count_lbl.setStyleSheet("font-size:11px;color:#8c8c8c;")
+        self._count_lbl.setStyleSheet("font-size:14px;color:#8c8c8c;")
         tb.addWidget(self._count_lbl)
         root.addLayout(tb)
         self._table = QTableWidget(0, 6)
@@ -419,13 +419,13 @@ class SecurityTab(QWidget):
         title.setStyleSheet("font-size:16px;font-weight:bold;color:#1a1f36;")
         hdr.addWidget(title); hdr.addStretch()
         self._stats_lbl = QLabel("")
-        self._stats_lbl.setStyleSheet("font-size:11px;color:#8c8c8c;")
+        self._stats_lbl.setStyleSheet("font-size:14px;color:#8c8c8c;")
         hdr.addWidget(self._stats_lbl)
         btn = QPushButton("\U0001f504 \u5237\u65b0")
         btn.setFixedSize(68, 26)
         btn.setStyleSheet(
             "background:#4a6cf7;color:#fff;border-radius:4px;"
-            "font-size:12px;border:none;")
+            "font-size:14px;border:none;")
         btn.clicked.connect(self._refresh)
         hdr.addWidget(btn)
         root.addLayout(hdr)
@@ -452,7 +452,7 @@ class SecurityTab(QWidget):
         root.addWidget(self._sub, 1)
 
         self._status = QLabel("\u5c31\u7eea")
-        self._status.setStyleSheet("font-size:11px;color:#6c757d;")
+        self._status.setStyleSheet("font-size:14px;color:#6c757d;")
         root.addWidget(self._status)
 
     def _on_user_selected(self, user_id: str):

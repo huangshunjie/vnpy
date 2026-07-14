@@ -1,4 +1,4 @@
-"""
+﻿"""
 platform_engineering/ui/deployment.py
 DeploymentTab — Phase 4
 部署列表 + 生命周期操作 + 版本历史 + 详情面板
@@ -300,7 +300,7 @@ class DetailPanel(QWidget):
         hdr.addWidget(self._title); hdr.addStretch()
         self._stage_badge = QLabel("")
         self._stage_badge.setStyleSheet(
-            "font-size:12px;padding:2px 10px;border-radius:10px;")
+            "font-size:14px;padding:2px 10px;border-radius:10px;")
         hdr.addWidget(self._stage_badge)
         root.addLayout(hdr)
         self._bar = QFrame(); self._bar.setFixedHeight(4)
@@ -365,7 +365,7 @@ class DetailPanel(QWidget):
         self._bar.setStyleSheet(f"background:{color};border-radius:2px;")
         self._stage_badge.setText(icon+" "+rec.current_stage.value.upper())
         self._stage_badge.setStyleSheet(
-            f"font-size:12px;padding:2px 10px;border-radius:10px;"
+            f"font-size:14px;padding:2px 10px;border-radius:10px;"
             f"background:{color}22;color:{color};border:1px solid {color}44;")
         is_frozen   = rec.is_frozen
         is_approval = rec.current_stage == DeployStage.APPROVAL
@@ -509,13 +509,13 @@ class DeploymentTab(QWidget):
         title.setStyleSheet("font-size:16px;font-weight:bold;color:#1a1f36;")
         hdr.addWidget(title); hdr.addStretch()
         self._stats_lbl = QLabel("")
-        self._stats_lbl.setStyleSheet("font-size:11px;color:#8c8c8c;")
+        self._stats_lbl.setStyleSheet("font-size:14px;color:#8c8c8c;")
         hdr.addWidget(self._stats_lbl)
         btn = QPushButton("\U0001f504 \u5237\u65b0")
         btn.setFixedSize(68, 26)
         btn.setStyleSheet(
             "background:#4a6cf7;color:#fff;border-radius:4px;"
-            "font-size:12px;border:none;")
+            "font-size:14px;border:none;")
         btn.clicked.connect(self._refresh)
         hdr.addWidget(btn)
         root.addLayout(hdr)
@@ -531,7 +531,7 @@ class DeploymentTab(QWidget):
         root.addWidget(sp, 1)
 
         self._status = QLabel("\u5c31\u7eea")
-        self._status.setStyleSheet("font-size:11px;color:#6c757d;")
+        self._status.setStyleSheet("font-size:14px;color:#6c757d;")
         root.addWidget(self._status)
 
     def _on_selected(self, deploy_id: str):

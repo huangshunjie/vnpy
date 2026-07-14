@@ -59,12 +59,12 @@ class AppCard(QtWidgets.QPushButton):
         short  = parts[0].strip()[:16]
         sub    = parts[1].strip()[:22] if len(parts) > 1 else ""
         lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(12, 8, 12, 8)
-        lay.setSpacing(2)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(4)
         for text, style in [
-            (short, "color:#fff;font-size:12px;font-weight:bold;"
+            (short, "color:#fff;font-size:14px;font-weight:bold;"
                     "background:transparent;border:none;"),
-            (sub,   "color:rgba(255,255,255,0.5);font-size:10px;"
+            (sub,   "color:rgba(255,255,255,0.55);font-size:14px;"
                     "background:transparent;border:none;"),
         ]:
             if not text:
@@ -74,7 +74,7 @@ class AppCard(QtWidgets.QPushButton):
             lbl.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
             lay.addWidget(lbl)
         self.setToolTip(display_name)
-        self.setFixedSize(196, 58 if sub else 44)
+        self.setFixedSize(220, 66)
         self.clicked.connect(func)
         self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet(f"""
@@ -128,9 +128,9 @@ class GroupBox(QtWidgets.QWidget):
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 16); lay.setSpacing(8)
         hdr = QtWidgets.QLabel(f"  {emoji}  {label}")
-        hdr.setFixedHeight(30)
+        hdr.setFixedHeight(34)
         hdr.setStyleSheet(
-            f"color:{color};font-size:12px;font-weight:bold;"
+            f"color:{color};font-size:14px;font-weight:bold;"
             f"background:{_rgba(color,18)};"
             f"border-left:3px solid {color};"
             f"border-radius:2px;padding-left:6px;")
@@ -173,7 +173,7 @@ class VeighNaAppsWindow(QtWidgets.QDialog):
              "color:#fff;font-size:17px;font-weight:bold;"
              "background:transparent;margin-left:6px;"),
             ("量化平台应用中心",
-             "color:rgba(255,255,255,0.4);font-size:11px;"
+             "color:rgba(255,255,255,0.4);font-size:14px;"
              "background:transparent;margin-left:10px;"),
         ]:
             lbl = QtWidgets.QLabel(text); lbl.setStyleSheet(style)
@@ -181,7 +181,7 @@ class VeighNaAppsWindow(QtWidgets.QDialog):
         hl.addStretch()
         total = sum(len(ns) for _,_,_,ns in APP_GROUPS)
         cnt = QtWidgets.QLabel(f"{total} 个应用")
-        cnt.setStyleSheet("color:#58a6ff;font-size:11px;background:transparent;")
+        cnt.setStyleSheet("color:#58a6ff;font-size:14px;background:transparent;")
         hl.addWidget(cnt)
         root.addWidget(hdr)
 

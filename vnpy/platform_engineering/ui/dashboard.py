@@ -1,4 +1,4 @@
-"""
+﻿"""
 platform_engineering/ui/dashboard.py
 DashboardTab — Phase 2
 健康分环形图 + 四层KPI卡片 + 统计概览 + 告警面板
@@ -98,12 +98,12 @@ class LayerScoreCard(QFrame):
             "background:transparent;border:none;")
         self._name_lbl = QLabel(layer.value.upper())
         self._name_lbl.setStyleSheet(
-            "font-size:10px;color:#8c8c8c;background:transparent;border:none;")
+            "font-size:14px;color:#8c8c8c;background:transparent;border:none;")
         texts.addWidget(self._score_lbl); texts.addWidget(self._name_lbl)
         lay.addLayout(texts); lay.addStretch()
         self._badge = QLabel("GREEN")
         self._badge.setStyleSheet(
-            "font-size:10px;padding:2px 6px;border-radius:8px;"
+            "font-size:14px;padding:2px 6px;border-radius:8px;"
             "background:#f6ffed;color:#52c41a;border:none;")
         lay.addWidget(self._badge)
 
@@ -121,7 +121,7 @@ class LayerScoreCard(QFrame):
             HealthLevel.RED:    "#fff2f0",
         }
         self._badge.setStyleSheet(
-            f"font-size:10px;padding:2px 6px;border-radius:8px;"
+            f"font-size:14px;padding:2px 6px;border-radius:8px;"
             f"background:{bg_map.get(level,'#f6ffed')};color:{color};border:none;")
 
 
@@ -145,7 +145,7 @@ class StatCard(QFrame):
         lay.addWidget(self._val)
         lbl = QLabel(label)
         lbl.setStyleSheet(
-            "font-size:11px;color:#8c8c8c;background:transparent;border:none;")
+            "font-size:14px;color:#8c8c8c;background:transparent;border:none;")
         lay.addWidget(lbl)
 
     def set_value(self, v) -> None:
@@ -165,16 +165,16 @@ class AlertRow(QFrame):
         lay = QHBoxLayout(self); lay.setContentsMargins(10, 6, 10, 6)
         sev = QLabel(alert.severity.value.upper())
         sev.setStyleSheet(
-            f"font-size:10px;font-weight:bold;color:{color};"
+            f"font-size:14px;font-weight:bold;color:{color};"
             f"background:{color}1a;padding:1px 6px;border-radius:6px;border:none;")
         sev.setFixedWidth(64); lay.addWidget(sev)
         msg = QLabel(alert.message)
         msg.setStyleSheet(
-            "font-size:12px;color:#262626;background:transparent;border:none;")
+            "font-size:14px;color:#262626;background:transparent;border:none;")
         msg.setWordWrap(True); lay.addWidget(msg, 1)
         ts = QLabel(alert.created_at.strftime("%H:%M:%S"))
         ts.setStyleSheet(
-            "font-size:10px;color:#bfbfbf;background:transparent;border:none;")
+            "font-size:14px;color:#bfbfbf;background:transparent;border:none;")
         lay.addWidget(ts)
 
 
@@ -200,13 +200,13 @@ class DashboardTab(QWidget):
         title.setStyleSheet("font-size:16px;font-weight:bold;color:#1a1f36;")
         hdr.addWidget(title); hdr.addStretch()
         self._last_update = QLabel("")
-        self._last_update.setStyleSheet("font-size:11px;color:#8c8c8c;")
+        self._last_update.setStyleSheet("font-size:14px;color:#8c8c8c;")
         hdr.addWidget(self._last_update)
         btn = QPushButton("\U0001f504 \u5237\u65b0")
         btn.setFixedSize(68, 26)
         btn.setStyleSheet(
             "background:#4a6cf7;color:#fff;border-radius:4px;"
-            "font-size:12px;border:none;")
+            "font-size:14px;border:none;")
         btn.clicked.connect(self._refresh)
         hdr.addWidget(btn)
         root.addLayout(hdr)
@@ -251,12 +251,12 @@ class DashboardTab(QWidget):
         right = QVBoxLayout(); right.setSpacing(6)
         alert_hdr = QHBoxLayout()
         atitle = QLabel("\U0001f514 \u6d3b\u8dc3\u544a\u8b66")
-        atitle.setStyleSheet("font-size:13px;font-weight:bold;color:#1a1f36;")
+        atitle.setStyleSheet("font-size:14px;font-weight:bold;color:#1a1f36;")
         alert_hdr.addWidget(atitle); alert_hdr.addStretch()
         self._alert_count = QLabel("0")
         self._alert_count.setStyleSheet(
             "background:#52c41a;color:#fff;border-radius:8px;"
-            "padding:1px 7px;font-size:11px;")
+            "padding:1px 7px;font-size:14px;")
         alert_hdr.addWidget(self._alert_count)
         right.addLayout(alert_hdr)
 
@@ -275,7 +275,7 @@ class DashboardTab(QWidget):
         self._no_alert_lbl = QLabel("\u2705 \u6240\u6709\u7cfb\u7edf\u8fd0\u884c\u6b63\u5e38")
         self._no_alert_lbl.setAlignment(Qt.AlignCenter)
         self._no_alert_lbl.setStyleSheet(
-            "font-size:13px;color:#52c41a;padding:20px;")
+            "font-size:14px;color:#52c41a;padding:20px;")
         self._alert_layout.addWidget(self._no_alert_lbl)
 
         body.addLayout(right, 2)
@@ -335,7 +335,7 @@ class DashboardTab(QWidget):
             self._alert_count.setText("0")
             self._alert_count.setStyleSheet(
                 "background:#52c41a;color:#fff;border-radius:8px;"
-                "padding:1px 7px;font-size:11px;")
+                "padding:1px 7px;font-size:14px;")
             self._alert_layout.addWidget(self._no_alert_lbl)
             self._no_alert_lbl.show()
         else:
@@ -343,7 +343,7 @@ class DashboardTab(QWidget):
             self._alert_count.setText(str(len(alerts)))
             self._alert_count.setStyleSheet(
                 "background:#ff4d4f;color:#fff;border-radius:8px;"
-                "padding:1px 7px;font-size:11px;")
+                "padding:1px 7px;font-size:14px;")
             for alert in sorted(
                     alerts, key=lambda a: a.created_at, reverse=True)[:30]:
                 row = AlertRow(alert)

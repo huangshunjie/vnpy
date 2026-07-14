@@ -1,4 +1,4 @@
-"""
+﻿"""
 platform_engineering/ui/log.py
 LogTab — Phase 2
 订阅平台所有事件，滚动显示日志流
@@ -119,7 +119,7 @@ class LogTab(QWidget):
         self._btn_pause.setFixedSize(68, 26)
         self._btn_pause.setStyleSheet(
             "background:#faad14;color:#fff;border-radius:4px;"
-            "font-size:12px;border:none;")
+            "font-size:14px;border:none;")
         self._btn_pause.toggled.connect(self._on_pause)
         hdr.addWidget(self._btn_pause)
 
@@ -127,7 +127,7 @@ class LogTab(QWidget):
         btn_clear.setFixedSize(68, 26)
         btn_clear.setStyleSheet(
             "background:#ff4d4f;color:#fff;border-radius:4px;"
-            "font-size:12px;border:none;")
+            "font-size:14px;border:none;")
         btn_clear.clicked.connect(self._on_clear)
         hdr.addWidget(btn_clear)
         root.addLayout(hdr)
@@ -149,7 +149,7 @@ class LogTab(QWidget):
 
         # status bar
         self._status = QLabel("0 \u6761\u65e5\u5fd7")
-        self._status.setStyleSheet("font-size:11px;color:#8c8c8c;")
+        self._status.setStyleSheet("font-size:14px;color:#8c8c8c;")
         root.addWidget(self._status)
 
     # ── event subscription ────────────────────────────────────────

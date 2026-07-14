@@ -1,4 +1,4 @@
-"""
+﻿"""
 platform_engineering/ui/api.py
 ApiTab — Phase 7
 路由列表 + 实时请求日志 + 统计面板 + 测试控制台
@@ -94,7 +94,7 @@ class StatCard(QFrame):
             "background:transparent;border:none;")
         lay.addWidget(self._val)
         lbl = QLabel(label)
-        lbl.setStyleSheet("font-size:11px;color:#8c8c8c;background:transparent;border:none;")
+        lbl.setStyleSheet("font-size:14px;color:#8c8c8c;background:transparent;border:none;")
         lay.addWidget(lbl)
 
     def set_value(self, v): self._val.setText(str(v))
@@ -256,7 +256,7 @@ class RequestLog(QWidget):
         tb.addWidget(self._btn_clear)
         tb.addStretch()
         self._count_lbl = QLabel("0 \u6761")
-        self._count_lbl.setStyleSheet("font-size:11px;color:#8c8c8c;")
+        self._count_lbl.setStyleSheet("font-size:14px;color:#8c8c8c;")
         tb.addWidget(self._count_lbl)
         root.addLayout(tb)
         self._table = QTableWidget(0, 6)
@@ -335,7 +335,7 @@ class TestConsole(QWidget):
         self._btn_send = QPushButton("\u25b6  \u53d1\u9001\u8bf7\u6c42")
         self._btn_send.setStyleSheet(
             "background:#4a6cf7;color:#fff;border-radius:4px;border:none;"
-            "font-size:13px;padding:4px 16px;")
+            "font-size:14px;padding:4px 16px;")
         self._btn_send.clicked.connect(self._on_send)
         btn_row.addWidget(self._btn_send)
         self._btn_clear = QPushButton("\u6e05\u7a7a")
@@ -343,7 +343,7 @@ class TestConsole(QWidget):
         btn_row.addWidget(self._btn_clear)
         btn_row.addStretch()
         self._status_lbl = QLabel("")
-        self._status_lbl.setStyleSheet("font-size:12px;font-weight:bold;")
+        self._status_lbl.setStyleSheet("font-size:14px;font-weight:bold;")
         btn_row.addWidget(self._status_lbl)
         root.addLayout(btn_row)
 
@@ -375,7 +375,7 @@ class TestConsole(QWidget):
                                      body=body, caller=caller)
         color = _status_color(resp.status_code)
         self._status_lbl.setText(f"HTTP {resp.status_code}  {resp.latency_ms:.1f}ms")
-        self._status_lbl.setStyleSheet(f"font-size:12px;font-weight:bold;color:{color};")
+        self._status_lbl.setStyleSheet(f"font-size:14px;font-weight:bold;color:{color};")
         out_lines = [
             f"// HTTP {resp.status_code}  latency={resp.latency_ms:.1f}ms",
             f"// request_id={resp.request_id}",
@@ -414,13 +414,13 @@ class ApiTab(QWidget):
         title.setStyleSheet("font-size:16px;font-weight:bold;color:#1a1f36;")
         hdr.addWidget(title); hdr.addStretch()
         self._stats_lbl = QLabel("")
-        self._stats_lbl.setStyleSheet("font-size:11px;color:#8c8c8c;")
+        self._stats_lbl.setStyleSheet("font-size:14px;color:#8c8c8c;")
         hdr.addWidget(self._stats_lbl)
         btn = QPushButton("\U0001f504 \u5237\u65b0")
         btn.setFixedSize(68, 26)
         btn.setStyleSheet(
             "background:#4a6cf7;color:#fff;border-radius:4px;"
-            "font-size:12px;border:none;")
+            "font-size:14px;border:none;")
         btn.clicked.connect(self._refresh)
         hdr.addWidget(btn)
         root.addLayout(hdr)
@@ -439,7 +439,7 @@ class ApiTab(QWidget):
         root.addWidget(self._sub, 1)
 
         self._status = QLabel("\u5c31\u7eea")
-        self._status.setStyleSheet("font-size:11px;color:#6c757d;")
+        self._status.setStyleSheet("font-size:14px;color:#6c757d;")
         root.addWidget(self._status)
 
     def _on_route_selected(self, path):
