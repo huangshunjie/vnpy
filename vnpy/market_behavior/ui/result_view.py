@@ -1,4 +1,4 @@
-"""
+﻿"""
 market_behavior/ui/result_view.py  —  选股结果 + 回测报告 Tab（完整实现）
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ _RED   = "#f38ba8"
 _MAV   = "#cba6f7"
 _ORG   = "#fab387"
 
-def _lbl(text, color=_FG, size=11, bold=False):
+def _lbl(text, color=_FG, size=14, bold=False):
     w = QtWidgets.QLabel(text)
     w.setStyleSheet(f"color:{color};font-size:{size}px;"
                     f"font-weight:{'bold' if bold else 'normal'};"
@@ -32,12 +32,12 @@ def _hline():
 
 _TBL_SS = (
     f"QTableWidget{{background:{_PAN2};color:{_FG};"
-    f"border:none;gridline-color:{_BORD};font-size:11px;}}"
+    f"border:none;gridline-color:{_BORD};font-size:14px;}}"
     f"QTableWidget::item{{padding:4px 8px;}}"
     f"QTableWidget::item:selected{{background:{_BLU};color:#1e1e2e;}}"
     f"QHeaderView::section{{background:{_PANEL};color:{_MUT};"
     f"border:none;border-bottom:1px solid {_BORD};"
-    f"padding:4px 8px;font-size:10px;font-weight:bold;}}"
+    f"padding:4px 8px;font-size:14px;font-weight:bold;}}"
 )
 
 
@@ -51,7 +51,7 @@ class StatCard(QtWidgets.QWidget):
         v = QtWidgets.QVBoxLayout(self)
         v.setContentsMargins(12, 8, 12, 8)
         v.setSpacing(2)
-        self._title = _lbl(title, color, 10, True)
+        self._title = _lbl(title, color, 14, True)
         v.addWidget(self._title)
         self._val = QtWidgets.QLabel("—")
         self._val.setStyleSheet(
@@ -90,7 +90,7 @@ class ResultViewTab(QtWidgets.QWidget):
 
         # ── 选股结果表格 ──────────────────────────────────────────
         screen_hdr = QtWidgets.QHBoxLayout()
-        screen_hdr.addWidget(_lbl("选股结果  Screening Results", _BLU, 12, True))
+        screen_hdr.addWidget(_lbl("选股结果  Screening Results", _BLU, 14, True))
         screen_hdr.addStretch()
         self._screen_count = _lbl("共 0 只", _MUT)
         screen_hdr.addWidget(self._screen_count)
@@ -98,7 +98,7 @@ class ResultViewTab(QtWidgets.QWidget):
         btn_export.setStyleSheet(
             f"QPushButton{{background:{_PANEL};color:{_BLU};"
             f"border:1px solid {_BLU};border-radius:4px;"
-            f"padding:4px 12px;font-size:10px;}}"
+            f"padding:4px 12px;font-size:14px;}}"
             f"QPushButton:hover{{background:{_BLU};color:#1e1e2e;}}")
         btn_export.clicked.connect(self._export_csv)
         screen_hdr.addWidget(btn_export)
@@ -107,7 +107,7 @@ class ResultViewTab(QtWidgets.QWidget):
         self._btn_bt.setStyleSheet(
             f"QPushButton{{background:{_GRN};color:#1e1e2e;"
             f"border:none;border-radius:4px;"
-            f"padding:4px 14px;font-size:10px;font-weight:bold;}}"
+            f"padding:4px 14px;font-size:14px;font-weight:bold;}}"
             f"QPushButton:hover{{background:#c0f0bc;}}"
             f"QPushButton:disabled{{background:#313244;color:#6c7086;}}")
         self._btn_bt.setToolTip("对选中股票运行历史回测（也可双击行）")
@@ -137,7 +137,7 @@ class ResultViewTab(QtWidgets.QWidget):
         root.addWidget(_hline())
 
         # ── 回测摘要卡片 ──────────────────────────────────────────
-        root.addWidget(_lbl("回测摘要  Backtest Summary", _GRN, 12, True))
+        root.addWidget(_lbl("回测摘要  Backtest Summary", _GRN, 14, True))
         cards_row = QtWidgets.QHBoxLayout()
         cards_row.setSpacing(10)
         self._cards = {}
@@ -157,7 +157,7 @@ class ResultViewTab(QtWidgets.QWidget):
         root.addWidget(_hline())
 
         # ── 触发明细表格 ──────────────────────────────────────────
-        root.addWidget(_lbl("触发明细  Trigger Detail", _YLW, 12, True))
+        root.addWidget(_lbl("触发明细  Trigger Detail", _YLW, 14, True))
         self._detail_table = QtWidgets.QTableWidget()
         self._detail_table.setColumnCount(5)
         self._detail_table.setHorizontalHeaderLabels(

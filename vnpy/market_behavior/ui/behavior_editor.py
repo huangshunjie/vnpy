@@ -1,4 +1,4 @@
-"""
+﻿"""
 market_behavior/ui/behavior_editor.py  —  行为条件编辑器 Tab
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ _YLW   = "#f9e2af"
 _MAV   = "#cba6f7"
 
 _BTN = ("QPushButton{background:%s;color:#1e1e2e;border:none;border-radius:4px;"
-        "padding:6px 16px;font-size:11px;font-weight:bold;}"
+        "padding:6px 16px;font-size:14px;font-weight:bold;}"
         "QPushButton:hover{background:%s;}"
         "QPushButton:disabled{background:#313244;color:#6c7086;}")
 
@@ -26,7 +26,7 @@ def _mkbtn(text, bg, hov):
     b.setStyleSheet(_BTN % (bg, hov))
     return b
 
-def _lbl(text, color=_FG, size=11, bold=False):
+def _lbl(text, color=_FG, size=14, bold=False):
     w = QtWidgets.QLabel(text)
     w.setStyleSheet(f"color:{color};font-size:{size}px;"
                     f"font-weight:{'bold' if bold else 'normal'};"
@@ -40,24 +40,24 @@ def _hline():
     return f
 
 _COMBO_SS = (f"QComboBox{{background:{_PAN2};color:{_FG};border:1px solid {_BORD};"
-             f"border-radius:4px;padding:4px 8px;font-size:11px;}}"
+             f"border-radius:4px;padding:4px 8px;font-size:14px;}}"
              f"QComboBox QAbstractItemView{{background:{_PAN2};color:{_FG};"
              f"selection-background-color:{_BLU};selection-color:#1e1e2e;}}")
 _SPIN_SS  = (f"QDoubleSpinBox,QSpinBox{{background:{_PAN2};color:{_FG};"
-             f"border:1px solid {_BORD};border-radius:4px;padding:4px 6px;font-size:11px;}}")
+             f"border:1px solid {_BORD};border-radius:4px;padding:4px 6px;font-size:14px;}}")
 _DE_SS    = (f"QDateEdit{{background:{_PAN2};color:{_FG};border:1px solid {_BORD};"
-             f"border-radius:4px;padding:4px;font-size:11px;}}")
-_CHK_SS   = f"QCheckBox{{color:{_FG};font-size:11px;background:transparent;border:none;}}"
+             f"border-radius:4px;padding:4px;font-size:14px;}}")
+_CHK_SS   = f"QCheckBox{{color:{_FG};font-size:14px;background:transparent;border:none;}}"
 
 COND_OPTIONS = [
-    ("综合强度  kline_strength", "kline_strength", 0.40),
-    ("上涨天数  rise_days",      "rise_days",      0.50),
-    ("大涨次数  rise_pct",       "rise_pct",       3.00),
-    ("大阳线数  big_yang_count", "big_yang_count", 2.00),
-    ("涨停次数  limit_up_count", "limit_up_count", 1.00),
-    ("突破次数  breakout_count", "breakout_count", 3.00),
-    ("波动强度  volatility",     "volatility",     2.00),
-    ("连续上涨  continuous",     "continuous",     3.00),
+    ("综合强度  kline_strength", "kline_strength", 0.40, "0−1得分", "越接0满分，越接1越强"),
+    ("上涨天数  rise_days",      "rise_days",      0.50, "0−1比率", "0.5 = 窗口内至少50%天收涨"),
+    ("大涨次数  rise_pct",       "rise_pct",       3.00, "% 涨幅",   "3.0 = 单日涨幅≥3%，至少出现1次"),
+    ("大阳线数  big_yang_count", "big_yang_count", 2.00, "次（根）",   "2.0 = 窗口内至少出现2根大阳线"),
+    ("涨停次数  limit_up_count", "limit_up_count", 1.00, "次数",     "1.0 = 窗口内至少涨停1次"),
+    ("突破次数  breakout_count", "breakout_count", 3.00, "次数",     "3.0 = 窗口内突破新高/均线≥3次"),
+    ("波动强度  volatility",     "volatility",     2.00, "% 振幅",   "2.0 = 日均振幅≥2%"),
+    ("连续上涨  continuous",     "continuous",     3.00, "天数",     "3.0 = 末尾连续收涨≥3天"),
 ]
 
 
@@ -73,9 +73,9 @@ class ConditionRow(QtWidgets.QWidget):
 
         self.cond_type = QtWidgets.QComboBox()
         self.cond_type.setStyleSheet(_COMBO_SS)
-        self.cond_type.setFixedWidth(220)
-        for label, val, default in COND_OPTIONS:
-            self.cond_type.addItem(label, val)
+        self.cond_type.setFixedWidth(270)
+        for label, val, default, unit, hint in COND_OPTIONS:
+            self.cond_type.addItem(label, (val, unit, hint))
         self.cond_type.currentIndexChanged.connect(self._on_type_changed)
         lay.addWidget(self.cond_type)
 
@@ -85,8 +85,14 @@ class ConditionRow(QtWidgets.QWidget):
         self.threshold.setRange(0.0, 9999.0)
         self.threshold.setValue(0.4)
         self.threshold.setSingleStep(0.05)
-        self.threshold.setFixedWidth(85)
+        self.threshold.setFixedWidth(100)
         lay.addWidget(self.threshold)
+
+        self._hint_lbl = QtWidgets.QLabel("")
+        self._hint_lbl.setStyleSheet(
+            "color:#f9e2af;font-size:14px;background:transparent;border:none;")
+        self._hint_lbl.setMinimumWidth(270)
+        lay.addWidget(self._hint_lbl)
 
         lay.addWidget(_lbl("权重", _MUT))
         self.weight = QtWidgets.QDoubleSpinBox()
@@ -94,7 +100,7 @@ class ConditionRow(QtWidgets.QWidget):
         self.weight.setRange(0.1, 10.0)
         self.weight.setValue(1.0)
         self.weight.setSingleStep(0.1)
-        self.weight.setFixedWidth(70)
+        self.weight.setFixedWidth(85)
         lay.addWidget(self.weight)
 
         lay.addStretch()
@@ -107,12 +113,13 @@ class ConditionRow(QtWidgets.QWidget):
         self._on_type_changed(0)
 
     def _on_type_changed(self, idx):
-        _, _, default = COND_OPTIONS[idx]
+        _, _, default, unit, hint = COND_OPTIONS[idx]
         self.threshold.setValue(default)
+        self._hint_lbl.setText(f"[单位:{unit}]  {hint}")
 
     def get_condition(self):
         return {
-            "cond_type": self.cond_type.currentData(),
+            "cond_type": self.cond_type.currentData()[0],
             "threshold": self.threshold.value(),
             "weight":    self.weight.value(),
         }
@@ -163,7 +170,7 @@ class BehaviorEditorTab(QtWidgets.QWidget):
         v = QtWidgets.QVBoxLayout(w)
         v.setContentsMargins(14, 14, 14, 14)
         v.setSpacing(8)
-        v.addWidget(_lbl("股票池  Stock Pool", _BLU, 12, True))
+        v.addWidget(_lbl("股票池  Stock Pool", _BLU, 14, True))
         v.addWidget(_hline())
 
         v.addWidget(_lbl("板块筛选", _MUT))
@@ -187,7 +194,7 @@ class BehaviorEditorTab(QtWidgets.QWidget):
         self._sym_edit.setStyleSheet(
             f"QPlainTextEdit{{background:{_PAN2};color:{_FG};"
             f"border:1px solid {_BORD};border-radius:4px;"
-            f"font-size:11px;padding:6px;}}")
+            f"font-size:14px;padding:6px;}}")
         self._sym_edit.setFixedHeight(76)
         v.addWidget(self._sym_edit)
 
@@ -223,7 +230,7 @@ class BehaviorEditorTab(QtWidgets.QWidget):
         v.setSpacing(8)
 
         hdr = QtWidgets.QHBoxLayout()
-        hdr.addWidget(_lbl("条件编辑器  Conditions", _GRN, 12, True))
+        hdr.addWidget(_lbl("条件编辑器  Conditions", _GRN, 14, True))
         hdr.addStretch()
         btn_add = _mkbtn("+ 添加条件", _GRN, "#c0f0bc")
         btn_add.clicked.connect(self._add_condition)
@@ -264,7 +271,7 @@ class BehaviorEditorTab(QtWidgets.QWidget):
         v = QtWidgets.QVBoxLayout(w)
         v.setContentsMargins(14, 14, 14, 14)
         v.setSpacing(8)
-        v.addWidget(_lbl("参数设置  Parameters", _YLW, 12, True))
+        v.addWidget(_lbl("参数设置  Parameters", _YLW, 14, True))
         v.addWidget(_hline())
 
         v.addWidget(_lbl("Top N 数量", _MUT))
@@ -277,7 +284,7 @@ class BehaviorEditorTab(QtWidgets.QWidget):
         v.addWidget(_lbl("排序依据", _MUT))
         self._sort_cb = QtWidgets.QComboBox()
         self._sort_cb.setStyleSheet(_COMBO_SS)
-        for label, val, _ in COND_OPTIONS[:4]:
+        for label, val, *_ in COND_OPTIONS[:4]:
             self._sort_cb.addItem(label, val)
         v.addWidget(self._sort_cb)
 
@@ -327,12 +334,12 @@ class BehaviorEditorTab(QtWidgets.QWidget):
         h.addWidget(self._status_lbl)
 
         self._btn_screen = _mkbtn("运行选股  ▶", _BLU, "#b4d0fa")
-        self._btn_screen.setFixedWidth(130)
+        self._btn_screen.setFixedWidth(150)
         self._btn_screen.clicked.connect(self._on_screen)
         h.addWidget(self._btn_screen)
 
         self._btn_bt = _mkbtn("历史回测  ◆", _GRN, "#c0f0bc")
-        self._btn_bt.setFixedWidth(130)
+        self._btn_bt.setFixedWidth(150)
         self._btn_bt.clicked.connect(self._on_backtest)
         h.addWidget(self._btn_bt)
 

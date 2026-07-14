@@ -1,4 +1,4 @@
-"""
+﻿"""
 market_behavior/ui/pattern_view.py  —  K线形态视图 Tab（完整实现）
 """
 from __future__ import annotations
@@ -19,15 +19,15 @@ _ORG   = "#fab387"
 
 _TBL_SS = (
     f"QTableWidget{{background:{_PAN2};color:{_FG};"
-    f"border:none;gridline-color:{_BORD};font-size:11px;}}"
+    f"border:none;gridline-color:{_BORD};font-size:14px;}}"
     f"QTableWidget::item{{padding:4px 8px;}}"
     f"QTableWidget::item:selected{{background:{_BLU};color:#1e1e2e;}}"
     f"QHeaderView::section{{background:{_PANEL};color:{_MUT};"
     f"border:none;border-bottom:1px solid {_BORD};"
-    f"padding:4px 8px;font-size:10px;font-weight:bold;}}"
+    f"padding:4px 8px;font-size:14px;font-weight:bold;}}"
 )
 
-def _lbl(text, color=_FG, size=11, bold=False):
+def _lbl(text, color=_FG, size=14, bold=False):
     w = QtWidgets.QLabel(text)
     w.setStyleSheet(f"color:{color};font-size:{size}px;"
                     f"font-weight:{'bold' if bold else 'normal'};"
@@ -132,7 +132,7 @@ class PatternViewTab(QtWidgets.QWidget):
         title_row = QtWidgets.QHBoxLayout()
         title_row.addWidget(_lbl("K线形态视图  Pattern View", _MAV, 15, True))
         title_row.addStretch()
-        self._sym_lbl = _lbl("未选择股票", _MUT, 12)
+        self._sym_lbl = _lbl("未选择股票", _MUT, 14)
         title_row.addWidget(self._sym_lbl)
         root.addLayout(title_row)
         root.addWidget(_hline())
@@ -152,21 +152,34 @@ class PatternViewTab(QtWidgets.QWidget):
             f"background:{_PANEL};border:1px solid {_BORD};border-radius:6px;")
         v = QtWidgets.QVBoxLayout(w)
         v.setContentsMargins(14, 14, 14, 14)
-        v.setSpacing(10)
-        v.addWidget(_lbl("形态分类统计  Categories", _MAV, 12, True))
+        v.setSpacing(4)
+
+        title = _lbl("形态分类统计  Categories", _MAV, 14, True)
+        title.setMinimumHeight(32)
+        v.addWidget(title)
         v.addWidget(_hline())
 
         for cat_name, cat_color, keys in CATEGORY_META:
-            v.addWidget(_lbl(cat_name, cat_color, 11, True))
+            cat_lbl = _lbl(cat_name, cat_color, 14, True)
+            cat_lbl.setMinimumHeight(32)
+            v.addWidget(cat_lbl)
             for key in keys:
-                row = QtWidgets.QHBoxLayout()
-                cn  = PATTERN_CN.get(key, key)
-                row.addWidget(_lbl(f"  {cn}", _FG, 10))
+                row_w = QtWidgets.QWidget()
+                row_w.setMinimumHeight(30)
+                row_w.setStyleSheet("background:transparent;")
+                row = QtWidgets.QHBoxLayout(row_w)
+                row.setContentsMargins(4, 0, 4, 0)
+                row.setSpacing(4)
+                cn = PATTERN_CN.get(key, key)
+                lbl_name = _lbl(f"  {cn}", _FG, 14)
+                lbl_name.setMinimumHeight(30)
+                row.addWidget(lbl_name)
                 row.addStretch()
-                cnt_lbl = _lbl("0", PATTERN_COLOR.get(key, _FG), 10, True)
+                cnt_lbl = _lbl("0", PATTERN_COLOR.get(key, _FG), 14, True)
+                cnt_lbl.setMinimumHeight(30)
                 self._count_labels[key] = cnt_lbl
                 row.addWidget(cnt_lbl)
-                v.addLayout(row)
+                v.addWidget(row_w)
             v.addWidget(_hline())
 
         v.addStretch()
@@ -181,7 +194,7 @@ class PatternViewTab(QtWidgets.QWidget):
         v.setSpacing(8)
 
         hdr = QtWidgets.QHBoxLayout()
-        hdr.addWidget(_lbl("形态识别结果  Detection Results", _BLU, 12, True))
+        hdr.addWidget(_lbl("形态识别结果  Detection Results", _BLU, 14, True))
         hdr.addStretch()
         self._total_lbl = _lbl("共 0 条", _MUT)
         hdr.addWidget(self._total_lbl)

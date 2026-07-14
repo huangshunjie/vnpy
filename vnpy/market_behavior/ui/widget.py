@@ -1,4 +1,4 @@
-"""
+﻿"""
 market_behavior/ui/widget.py  —  主窗口 + Worker 线程（完整实现）
 """
 from __future__ import annotations
@@ -37,7 +37,7 @@ _RED   = "#f38ba8"
 _MAV   = "#cba6f7"
 
 
-def _lbl(text, color=_FG, size=11, bold=False):
+def _lbl(text, color=_FG, size=14, bold=False):
     w = QtWidgets.QLabel(text)
     w.setStyleSheet(
         f"color:{color};font-size:{size}px;"
@@ -362,12 +362,12 @@ class MarketBehaviorWidget(QtWidgets.QMainWindow):
         self._status_dot = QtWidgets.QLabel("●")
         self._status_dot.setStyleSheet(
             f"color:{_MUT};font-size:14px;background:transparent;border:none;")
-        self._status_lbl = _lbl("STOPPED", _MUT, 11, True)
-        self._phase_lbl  = _lbl("Phase 9 · Full", _MUT, 10)
+        self._status_lbl = _lbl("STOPPED", _MUT, 14, True)
+        self._phase_lbl  = _lbl("Phase 9 · Full", _MUT, 14)
 
         lay.addWidget(self._status_dot)
         lay.addWidget(self._status_lbl)
-        lay.addWidget(_lbl("|", _BORD, 11))
+        lay.addWidget(_lbl("|", _BORD, 14))
         lay.addWidget(self._phase_lbl)
         return w
 
@@ -376,7 +376,7 @@ class MarketBehaviorWidget(QtWidgets.QMainWindow):
         self._tabs.setStyleSheet(
             f"QTabWidget::pane{{border:1px solid {_BORD};background:{_BG};}}"
             f"QTabBar::tab{{background:{_PANEL};color:{_MUT};"
-            f"  border:1px solid {_BORD};padding:7px 18px;font-size:11px;}}"
+            f"  border:1px solid {_BORD};padding:7px 18px;font-size:14px;}}"
             f"QTabBar::tab:selected{{background:{_PAN2};color:{_MAV};"
             f"  border-bottom:2px solid {_MAV};}}"
             f"QTabBar::tab:hover{{color:{_FG};}}")
@@ -405,13 +405,13 @@ class MarketBehaviorWidget(QtWidgets.QMainWindow):
         lay = QtWidgets.QVBoxLayout(w)
         lay.setContentsMargins(10, 6, 10, 6)
         lay.setSpacing(4)
-        lay.addWidget(_lbl("系统日志  System Log", _BLU, 10, True))
+        lay.addWidget(_lbl("系统日志  System Log", _BLU, 14, True))
         self._log_edit = QtWidgets.QTextEdit()
         self._log_edit.setReadOnly(True)
         self._log_edit.setStyleSheet(
             f"QTextEdit{{background:{_PAN2};color:{_GRN};"
             f"  border:none;"
-            f"  font-family:Consolas,monospace;font-size:10px;}}")
+            f"  font-family:Consolas,monospace;font-size:14px;}}")
         lay.addWidget(self._log_edit)
         return w
 
@@ -541,7 +541,7 @@ class MarketBehaviorWidget(QtWidgets.QMainWindow):
             f"color:{_GRN};font-size:14px;background:transparent;border:none;")
         self._status_lbl.setText("RUNNING")
         self._status_lbl.setStyleSheet(
-            f"color:{_GRN};font-size:11px;font-weight:bold;"
+            f"color:{_GRN};font-size:14px;font-weight:bold;"
             f"background:transparent;border:none;")
         self._log("Market Behavior Engine started.")
 
@@ -550,7 +550,7 @@ class MarketBehaviorWidget(QtWidgets.QMainWindow):
             f"color:{_MUT};font-size:14px;background:transparent;border:none;")
         self._status_lbl.setText("STOPPED")
         self._status_lbl.setStyleSheet(
-            f"color:{_MUT};font-size:11px;font-weight:bold;"
+            f"color:{_MUT};font-size:14px;font-weight:bold;"
             f"background:transparent;border:none;")
         self._log("Engine stopped.")
 

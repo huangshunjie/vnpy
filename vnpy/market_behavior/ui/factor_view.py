@@ -1,4 +1,4 @@
-"""
+﻿"""
 market_behavior/ui/factor_view.py  —  行为因子视图 Tab（完整实现）
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ _RED   = "#f38ba8"
 _MAV   = "#cba6f7"
 _ORG   = "#fab387"
 
-def _lbl(text, color=_FG, size=11, bold=False):
+def _lbl(text, color=_FG, size=14, bold=False):
     w = QtWidgets.QLabel(text)
     w.setStyleSheet(f"color:{color};font-size:{size}px;"
                     f"font-weight:{'bold' if bold else 'normal'};"
@@ -72,7 +72,7 @@ class FactorCard(QtWidgets.QWidget):
 
         # 名称 + 数值 同行
         top = QtWidgets.QHBoxLayout()
-        self._name_lbl = _lbl(name, color, 11, True)
+        self._name_lbl = _lbl(name, color, 14, True)
         top.addWidget(self._name_lbl)
         top.addStretch()
         self._val_lbl = _lbl("—", _FG, 14, True)
@@ -91,7 +91,7 @@ class FactorCard(QtWidgets.QWidget):
         v.addWidget(self._bar)
 
         # 描述
-        v.addWidget(_lbl(desc, _MUT, 10))
+        v.addWidget(_lbl(desc, _MUT, 14))
 
     def update_value(self, norm_val: float, raw_val: float):
         """norm_val 0~1，raw_val 原始值。"""
@@ -138,7 +138,7 @@ class FactorViewTab(QtWidgets.QWidget):
         title_row = QtWidgets.QHBoxLayout()
         title_row.addWidget(_lbl("行为因子视图  Factor View", _MAV, 15, True))
         title_row.addStretch()
-        self._sym_label = _lbl("未选择股票", _MUT, 12)
+        self._sym_label = _lbl("未选择股票", _MUT, 14)
         title_row.addWidget(self._sym_label)
         root.addLayout(title_row)
 
@@ -169,7 +169,7 @@ class FactorViewTab(QtWidgets.QWidget):
         v = QtWidgets.QVBoxLayout(w)
         v.setContentsMargins(14, 12, 14, 12)
         v.setSpacing(8)
-        v.addWidget(_lbl("行为标签  Labels", _GRN, 12, True))
+        v.addWidget(_lbl("行为标签  Labels", _GRN, 14, True))
         v.addWidget(_hline())
 
         self._label_container = QtWidgets.QWidget()
@@ -186,7 +186,7 @@ class FactorViewTab(QtWidgets.QWidget):
         v.addWidget(scroll, stretch=1)
 
         v.addWidget(_hline())
-        self._label_hint = _lbl("运行选股后自动更新", _MUT, 10)
+        self._label_hint = _lbl("运行选股后自动更新", _MUT, 14)
         v.addWidget(self._label_hint)
         return w
 
@@ -197,7 +197,7 @@ class FactorViewTab(QtWidgets.QWidget):
         v = QtWidgets.QVBoxLayout(w)
         v.setContentsMargins(14, 12, 14, 12)
         v.setSpacing(8)
-        v.addWidget(_lbl("扫描记录  Scan History（近期结果）", _BLU, 12, True))
+        v.addWidget(_lbl("扫描记录  Scan History（近期结果）", _BLU, 14, True))
         v.addWidget(_hline())
 
         self._history_table = QtWidgets.QTableWidget()
@@ -206,11 +206,11 @@ class FactorViewTab(QtWidgets.QWidget):
             ["代码", "综合强度", "上涨%", "突破次数", "涨停", "标签"])
         self._history_table.setStyleSheet(
             f"QTableWidget{{background:{_PAN2};color:{_FG};"
-            f"border:none;gridline-color:{_BORD};font-size:11px;}}"
+            f"border:none;gridline-color:{_BORD};font-size:14px;}}"
             f"QTableWidget::item{{padding:4px 6px;}}"
             f"QTableWidget::item:selected{{background:{_BLU};color:#1e1e2e;}}"
             f"QHeaderView::section{{background:{_PANEL};color:{_MUT};"
-            f"border:none;border-bottom:1px solid {_BORD};padding:4px;font-size:10px;}}")
+            f"border:none;border-bottom:1px solid {_BORD};padding:4px;font-size:14px;}}")
         self._history_table.horizontalHeader().setStretchLastSection(True)
         self._history_table.setSelectionBehavior(
             QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
@@ -245,9 +245,9 @@ class FactorViewTab(QtWidgets.QWidget):
             for lt_val, score in labels:
                 row = QtWidgets.QHBoxLayout()
                 color = LABEL_COLOR.get(lt_val, _FG)
-                dot = _lbl("●", color, 12)
-                name = _lbl(lt_val, _FG, 11)
-                pct  = _lbl(f"{score*100:.0f}%", color, 11, True)
+                dot = _lbl("●", color, 14)
+                name = _lbl(lt_val, _FG, 14)
+                pct  = _lbl(f"{score*100:.0f}%", color, 14, True)
                 bar  = QtWidgets.QProgressBar()
                 bar.setRange(0, 100)
                 bar.setValue(int(score * 100))
