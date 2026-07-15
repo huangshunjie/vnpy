@@ -4,6 +4,22 @@ market_behavior/ui/result_view.py  —  选股结果 + 回测报告 Tab（完整
 from __future__ import annotations
 from vnpy.trader.ui import QtWidgets, QtCore, QtGui
 
+
+LABEL_CN = {
+    "trend_strong":    "强趋势",
+    "trend_weak":      "弱趋势",
+    "continuous_rise": "连续上涨",
+    "continuous_fall": "连续下跌",
+    "limit_dense":     "涨停密集",
+    "breakout":        "突破信号",
+    "high_volatility": "高波动",
+    "reversal":        "反转信号",
+    "consolidation":   "盘整阶段",
+}
+
+def _label_cn(val: str) -> str:
+    cn = LABEL_CN.get(val); return f"{cn}({val})" if cn else val
+
 _BG    = "#1e1e2e"
 _PANEL = "#181825"
 _PAN2  = "#11111b"
@@ -67,6 +83,7 @@ class StatCard(QtWidgets.QWidget):
 class ResultViewTab(QtWidgets.QWidget):
     # 双击/右键触发回测时发出：symbol
     sig_backtest_symbol = QtCore.Signal(str)
+    sig_show_kline   = QtCore.Signal(str, list)  # symbol, trigger_indices
 
     """
     结果视图 Tab。
@@ -77,6 +94,8 @@ class ResultViewTab(QtWidgets.QWidget):
     def __init__(self, engine=None, parent=None):
         super().__init__(parent)
         self._engine = engine
+        self._last_bt_triggers: list = []
+        self._pending_kline_symbol: str = ''
         self._init_ui()
 
     def _init_ui(self):
@@ -197,7 +216,7 @@ class ResultViewTab(QtWidgets.QWidget):
                 (f"{rd.value*100:.0f}%" if rd else "—", _FG),
                 (f"{bk.value:.1f}" if bk else "—",  _FG),
                 (f"{int(lu.value)}" if lu else "—", _MAV if lu and lu.value > 0 else _FG),
-                (", ".join(lbs) if lbs else "—",    _MUT),
+                (", ".join(_label_cn(l) for l in lbs) if lbs else "—",    _MUT),
             ]
             for col, (text, color) in enumerate(items):
                 item = QtWidgets.QTableWidgetItem(text)
@@ -209,6 +228,7 @@ class ResultViewTab(QtWidgets.QWidget):
 
     def show_backtest_report(self, report: dict, triggers: list, hold_days: int):
         """显示回测摘要 + 触发明细。"""
+        self._last_bt_triggers = triggers or []
         mapping = {
             "trigger_count": str(report.get("trigger_count", "—")),
             "hit_rate":      report.get("hit_rate",  "N/A"),
@@ -244,6 +264,12 @@ class ResultViewTab(QtWidgets.QWidget):
                 self._detail_table.setItem(row, col, item)
 
         self._detail_table.resizeColumnsToContents()
+        # 回测完成后若有待跳转的股票，自动发出 K 线信号
+        if self._pending_kline_symbol:
+            sym = self._pending_kline_symbol
+            self._pending_kline_symbol = ''
+            dates = [str(t.trigger_dt)[:10] for t in self._last_bt_triggers if t.symbol == sym]
+            self.sig_show_kline.emit(sym, dates)
 
     def clear(self):
         self._screen_table.setRowCount(0)
@@ -285,6 +311,7 @@ class ResultViewTab(QtWidgets.QWidget):
     def _on_row_double_clicked(self, index) -> None:
         sym = self._selected_symbol()
         if sym:
+            self._pending_kline_symbol = sym
             self.sig_backtest_symbol.emit(sym)
 
     def _on_backtest_selected(self) -> None:
@@ -305,6 +332,9 @@ class ResultViewTab(QtWidgets.QWidget):
         act_bt  = menu.addAction(f"对 {sym} 运行历史回测")
         act_pat = menu.addAction(f"查看 {sym} K线形态")
         act_fac = menu.addAction(f"查看 {sym} 因子详情")
+        act_kline = menu.addAction("查看K线图")
+        act_kline.triggered.connect(
+            lambda _sym=sym: self.sig_show_kline.emit(_sym, [str(t.trigger_dt)[:10] for t in self._last_bt_triggers if t.symbol == _sym]))
         action  = menu.exec(self._screen_table.viewport().mapToGlobal(pos))
         if action == act_bt:
             self.sig_backtest_symbol.emit(sym)

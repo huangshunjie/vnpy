@@ -4,6 +4,22 @@ market_behavior/ui/factor_view.py  —  行为因子视图 Tab（完整实现）
 from __future__ import annotations
 from vnpy.trader.ui import QtWidgets, QtCore
 
+
+LABEL_CN = {
+    "trend_strong":    "强趋势",
+    "trend_weak":      "弱趋势",
+    "continuous_rise": "连续上涨",
+    "continuous_fall": "连续下跌",
+    "limit_dense":     "涨停密集",
+    "breakout":        "突破信号",
+    "high_volatility": "高波动",
+    "reversal":        "反转信号",
+    "consolidation":   "盘整阶段",
+}
+
+def _label_cn(val: str) -> str:
+    cn = LABEL_CN.get(val); return f"{cn}({val})" if cn else val
+
 _BG    = "#1e1e2e"
 _PANEL = "#181825"
 _PAN2  = "#11111b"
@@ -246,7 +262,7 @@ class FactorViewTab(QtWidgets.QWidget):
                 row = QtWidgets.QHBoxLayout()
                 color = LABEL_COLOR.get(lt_val, _FG)
                 dot = _lbl("●", color, 14)
-                name = _lbl(lt_val, _FG, 14)
+                name = _lbl(_label_cn(lt_val), _FG, 14)
                 pct  = _lbl(f"{score*100:.0f}%", color, 14, True)
                 bar  = QtWidgets.QProgressBar()
                 bar.setRange(0, 100)
@@ -290,7 +306,7 @@ class FactorViewTab(QtWidgets.QWidget):
         self._history_table.setItem(r, 2, QtWidgets.QTableWidgetItem(f"{rise_pct*100:.0f}%"))
         self._history_table.setItem(r, 3, QtWidgets.QTableWidgetItem(f"{breakout:.1f}"))
         self._history_table.setItem(r, 4, QtWidgets.QTableWidgetItem(f"{int(limit_up)}"))
-        self._history_table.setItem(r, 5, QtWidgets.QTableWidgetItem(", ".join(labels)))
+        self._history_table.setItem(r, 5, QtWidgets.QTableWidgetItem(", ".join(_label_cn(l) for l in labels)))
 
     def clear_history(self):
         self._history_table.setRowCount(0)

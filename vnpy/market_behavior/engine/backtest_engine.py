@@ -44,6 +44,7 @@ class TriggerRecord:
         self.details       = details
         # 持有期收益率（由 calc_forward_return 填充）
         self.forward_returns: Dict[int, float] = {}
+        self.gross_returns:   Dict[int, float] = {}  # 扣成本前的毛收益
 
     def to_dict(self) -> dict:
         return {
@@ -135,6 +136,10 @@ class BacktestEngine:
         "annual_factor":     252,   # 年化因子（交易日）
         "min_triggers":      3,     # 回测有效触发次数下限
         "allow_overlap":     False, # 是否允许持仓期内再次触发
+        # 交易成本（均为小数，如万3=0.0003）
+        "commission_rate":   0.0003,  # 买入手续费率（万3）
+        "stamp_duty_rate":   0.0010,  # 卖出印花税率（千1）
+        "slippage_rate":     0.0002,  # 滑点（买卖各承担一半，共万2）
     }
 
     def __init__(
@@ -176,12 +181,18 @@ class BacktestEngine:
         all_bars:  List[CandleBar],
         spec:      ScreenSpec,
         hold_days: int = 0,
+        commission_rate: float = None,   # 买入手续费率，默认读 DEFAULT_CFG
+        stamp_duty_rate: float = None,   # 卖出印花税率，默认读 DEFAULT_CFG
+        slippage_rate:   float = None,   # 买卖总滑点，默认读 DEFAULT_CFG
     ) -> BacktestResult:
         """
         逐根回放 all_bars，在每根K线末尾用 AdapterEngine 评估条件。
         记录触发点，计算持有收益，返回 BacktestResult。
         """
         hold = hold_days or self._cfg["hold_days"]
+        comm  = commission_rate if commission_rate is not None else self._cfg["commission_rate"]
+        stamp = stamp_duty_rate if stamp_duty_rate is not None else self._cfg["stamp_duty_rate"]
+        slip  = slippage_rate   if slippage_rate   is not None else self._cfg["slippage_rate"]
         warmup = self._cfg["warmup_bars"]
         bt_id  = uuid.uuid4().hex[:10]
 
@@ -229,7 +240,7 @@ class BacktestEngine:
                 in_hold_until = i + hold
 
         # 计算持有收益
-        self._fill_forward_returns(triggers, all_bars, [hold])
+        self._fill_forward_returns(triggers, all_bars, [hold], comm, stamp, slip)
 
         # 统计指标
         metrics = self._calc_metrics(triggers, hold, len(all_bars))
@@ -251,6 +262,9 @@ class BacktestEngine:
         triggers:  List[TriggerRecord],
         all_bars:  List[CandleBar],
         hold_days: List[int],
+        commission_rate: float = 0.0,
+        stamp_duty_rate: float = 0.0,
+        slippage_rate:   float = 0.0,
     ) -> None:
         """为每条触发记录填充各持有天数的收益率。"""
         for rec in triggers:
@@ -262,16 +276,12 @@ class BacktestEngine:
                 j = i + h
                 if j < len(all_bars):
                     pn = all_bars[j].close
-                    rec.forward_returns[h] = (pn - p0) / p0
                 else:
-                    # 不足 h 根：用最后一根
                     pn = all_bars[-1].close
-                    rec.forward_returns[h] = (pn - p0) / p0
-
-    # ══════════════════════════════════════════════════════════════════
-    # 指标计算
-    # ══════════════════════════════════════════════════════════════════
-
+                cost = commission_rate + stamp_duty_rate + slippage_rate
+                raw_return = (pn - p0) / p0
+                rec.forward_returns[h] = raw_return - cost
+                rec.gross_returns[h]   = raw_return
     def _calc_metrics(
         self,
         triggers:   List[TriggerRecord],

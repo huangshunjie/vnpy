@@ -15,6 +15,7 @@ _BLU   = "#89b4fa"
 _GRN   = "#a6e3a1"
 _YLW   = "#f9e2af"
 _MAV   = "#cba6f7"
+_RED   = "#f38ba8"
 
 _BTN = ("QPushButton{background:%s;color:#1e1e2e;border:none;border-radius:4px;"
         "padding:6px 16px;font-size:14px;font-weight:bold;}"
@@ -199,7 +200,14 @@ class BehaviorEditorTab(QtWidgets.QWidget):
         v.addWidget(self._sym_edit)
 
         v.addWidget(_hline())
-        v.addWidget(_lbl("时间范围", _MUT))
+        _time_hdr = QtWidgets.QHBoxLayout()
+        _time_hdr.setContentsMargins(0, 0, 0, 0)
+        _time_hdr.addWidget(_lbl("时间范围", _MUT))
+        self._bars_hint = QtWidgets.QLabel("")
+        self._bars_hint.setStyleSheet("color:#a6e3a1;font-size:14px;background:transparent;")
+        _time_hdr.addWidget(self._bars_hint)
+        _time_hdr.addStretch()
+        v.addLayout(_time_hdr)
         row = QtWidgets.QHBoxLayout()
         self._dt_start = QtWidgets.QDateEdit()
         self._dt_end   = QtWidgets.QDateEdit()
@@ -207,21 +215,40 @@ class BehaviorEditorTab(QtWidgets.QWidget):
             de.setDate(QtCore.QDate.currentDate().addDays(-ago))
             de.setCalendarPopup(True)
             de.setStyleSheet(_DE_SS)
+        self._dt_start.dateChanged.connect(self._update_bars_hint)
+        self._dt_end.dateChanged.connect(self._update_bars_hint)
         row.addWidget(self._dt_start)
         row.addWidget(_lbl("~", _MUT))
         row.addWidget(self._dt_end)
         v.addLayout(row)
+        self._update_bars_hint()
 
         v.addWidget(_hline())
         v.addWidget(_lbl("因子窗口（根）", _MUT))
         self._window_sp = QtWidgets.QSpinBox()
-        self._window_sp.setRange(5, 250)
+        self._window_sp.setRange(5, 4200)
         self._window_sp.setValue(20)
         self._window_sp.setStyleSheet(_SPIN_SS)
         v.addWidget(self._window_sp)
 
         v.addStretch()
         return w
+
+    def _update_bars_hint(self, *_) -> None:
+        """根据当前选择的起止日期估算交易日数并更新提示标签。"""
+        import datetime as _dt
+        d1 = self._dt_start.date()
+        d2 = self._dt_end.date()
+        start = _dt.date(d1.year(), d1.month(), d1.day())
+        end   = _dt.date(d2.year(), d2.month(), d2.day())
+        if end <= start:
+            self._bars_hint.setText("（日期无效）")
+            return
+        days  = (end - start).days
+        # 按交易日约占自然日 5/7 估算，精确到±5根左右
+        bars  = int(days * 5 / 7)
+        self._bars_hint.setText(f"（约 {bars} 根）")
+
 
     def _build_center(self):
         w = self._panel(_GRN)
@@ -308,6 +335,39 @@ class BehaviorEditorTab(QtWidgets.QWidget):
         self._minbars_sp.setStyleSheet(_SPIN_SS)
         v.addWidget(self._minbars_sp)
 
+        v.addWidget(_hline())
+        v.addWidget(_lbl("交易成本设置", _RED, 14, True))
+
+        v.addWidget(_lbl("手续费率（万，买入）", _MUT))
+        self._comm_sp = QtWidgets.QDoubleSpinBox()
+        self._comm_sp.setRange(0.0, 100.0)
+        self._comm_sp.setValue(3.0)
+        self._comm_sp.setSingleStep(0.5)
+        self._comm_sp.setDecimals(1)
+        self._comm_sp.setStyleSheet(_SPIN_SS)
+        self._comm_sp.setToolTip("默认3（即万分之三，0.03%）")
+        v.addWidget(self._comm_sp)
+
+        v.addWidget(_lbl("印花税率（千，卖出）", _MUT))
+        self._stamp_sp = QtWidgets.QDoubleSpinBox()
+        self._stamp_sp.setRange(0.0, 100.0)
+        self._stamp_sp.setValue(1.0)
+        self._stamp_sp.setSingleStep(0.5)
+        self._stamp_sp.setDecimals(1)
+        self._stamp_sp.setStyleSheet(_SPIN_SS)
+        self._stamp_sp.setToolTip("默认1（即千分之一，0.1%），仅卖出时收取")
+        v.addWidget(self._stamp_sp)
+
+        v.addWidget(_lbl("滑点（万，买卖合计）", _MUT))
+        self._slip_sp = QtWidgets.QDoubleSpinBox()
+        self._slip_sp.setRange(0.0, 50.0)
+        self._slip_sp.setValue(2.0)
+        self._slip_sp.setSingleStep(0.5)
+        self._slip_sp.setDecimals(1)
+        self._slip_sp.setStyleSheet(_SPIN_SS)
+        self._slip_sp.setToolTip("买卖合计滑点，默认2万（即买入+卖出各笡1万）")
+        v.addWidget(self._slip_sp)
+
         v.addStretch()
         return w
 
@@ -382,6 +442,9 @@ class BehaviorEditorTab(QtWidgets.QWidget):
             "sort_desc":  self._sort_desc_chk.isChecked(),
             "hold_days":  self._hold_sp.value(),
             "min_bars":   self._minbars_sp.value(),
+            "comm_rate":   self._comm_sp.value()  / 10000,
+            "stamp_rate":  self._stamp_sp.value() / 10000,
+            "slip_rate":   self._slip_sp.value()  / 10000,
             "require_all": self._rb_and.isChecked(),
             "boards": {k: c.isChecked() for k, c in self._chk.items()},
         }

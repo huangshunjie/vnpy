@@ -23,6 +23,7 @@ from .behavior_editor import BehaviorEditorTab
 from .pattern_view    import PatternViewTab
 from .factor_view     import FactorViewTab
 from .result_view     import ResultViewTab
+from .kline_view   import KlineViewTab
 
 _BG    = "#1e1e2e"
 _PANEL = "#181825"
@@ -292,7 +293,10 @@ class BacktestWorker(QtCore.QThread):
             spec   = ae.build_spec("回测", conditions=conds,
                                     require_all=cfg.get("require_all", True))
             self.sig_progress.emit(70, f"回测中（持有 {hold} 天）...")
-            result = be.run(sym, bars, spec, hold_days=hold)
+            result = be.run(sym, bars, spec, hold_days=hold,
+                           commission_rate=cfg.get("comm_rate",  0.0003),
+                           stamp_duty_rate=cfg.get("stamp_rate", 0.0010),
+                           slippage_rate=  cfg.get("slip_rate",  0.0002))
             report = be.report(result)
 
             self.sig_progress.emit(100, f"完成，触发 {report['trigger_count']} 次")
@@ -385,16 +389,19 @@ class MarketBehaviorWidget(QtWidgets.QMainWindow):
         self.pattern_tab = PatternViewTab(engine=self.engine)
         self.factor_tab  = FactorViewTab(engine=self.engine)
         self.result_tab  = ResultViewTab(engine=self.engine)
+        self.kline_tab   = KlineViewTab(engine=self.engine)
 
         self._tabs.addTab(self.editor_tab,  "条件编辑器  Editor")
         self._tabs.addTab(self.pattern_tab, "形态视图  Patterns")
         self._tabs.addTab(self.factor_tab,  "行为因子  Factors")
         self._tabs.addTab(self.result_tab,  "筛选结果  Results")
+        self._tabs.addTab(self.kline_tab,   "K线图  Chart")
 
         # 连接编辑器信号
         self.editor_tab.sig_run_screen.connect(self._on_run_screen)
         self.editor_tab.sig_run_backtest.connect(self._on_run_backtest)
         self.result_tab.sig_backtest_symbol.connect(self._on_result_backtest)
+        self.result_tab.sig_show_kline.connect(self._on_show_kline)
 
         return self._tabs
 
@@ -608,6 +615,11 @@ class MarketBehaviorWidget(QtWidgets.QMainWindow):
         if self.engine:
             self.engine.close()
         super().closeEvent(event)
+    def _on_show_kline(self, symbol: str, trigger_indices: list) -> None:
+        """切换到K线图Tab并显示指定股票。"""
+        self.kline_tab.show_symbol(symbol, trigger_indices)
+        self._tabs.setCurrentWidget(self.kline_tab)
+
     def _on_result_backtest(self, sym: str) -> None:
         """从结果表格双击/右键/按钮触发回测。"""
         # 特殊前缀：查看因子详情
