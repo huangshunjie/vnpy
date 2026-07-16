@@ -77,7 +77,18 @@ COND_GROUPS = [
         ("  涨停次数  limit_up_count","limit_up_count", 1.00, "次数",     "窗口内涨停次数 >= N"),
     ]),
     ("🌊 波动行为  Volatility", [
-        ("  波动强度  volatility",    "volatility",     2.00, "% 振幅",   "日均振幅 >= N%"),
+        ("  波动强度  volatility",    "volatility",     2.00, "% 振幅",    "日均振幅 >= N%"),
+        ("  ATR振幅   atr_ratio",     "atr_ratio",      1.00, "% (ATR/价)","ATR占收盘价的比例 >= N%"),
+        ("  布林带宽  boll_width",    "boll_width",     0.05, "宽度比",    "布林带宽度(上下轨/中轨) >= N"),
+    ]),
+    ("⚡ 技术指标  Indicator", [
+        ("  MACD金叉  macd_golden",   "macd_golden",    0.00, "（无阈值）", "日线MACD DIF上穿DEA（金叉）"),
+        ("  MACD死叉  macd_death",    "macd_death",     0.00, "（无阈值）", "日线MACD DIF下穿DEA（死叉）"),
+        ("  RSI范围   rsi_range",     "rsi_range",     30.00, "RSI下限",   "RSI(14)在[N, 70]范围内，N=下限"),
+        ("  回踩检测  pullback",      "pullback",       -5.0, "% 跌幅",    "近期跌幅在合理范围，表示健康回踩"),
+    ]),
+    ("📅 周线指标  Weekly", [
+        ("  13周均线↑ weekly_ma_slope","weekly_ma_slope",0.00,"（无阈值）","周线MA(13)斜率向上"),
     ]),
 ]
 # 向后兼容
@@ -365,12 +376,45 @@ class BehaviorEditorTab(QtWidgets.QWidget):
         v.addWidget(self._sort_desc_chk)
 
         v.addWidget(_hline())
-        v.addWidget(_lbl("回测持有天数", _MUT))
+        v.addWidget(_lbl("回测卖出设置", _YLW, 13, True))
+
+        v.addWidget(_lbl("最大持仓天数", _MUT))
         self._hold_sp = QtWidgets.QSpinBox()
-        self._hold_sp.setRange(1, 60)
-        self._hold_sp.setValue(5)
+        self._hold_sp.setRange(1, 120)
+        self._hold_sp.setValue(20)
         self._hold_sp.setStyleSheet(_SPIN_SS)
+        self._hold_sp.setToolTip("超过此天数强制卖出（兜底）")
         v.addWidget(self._hold_sp)
+
+        v.addWidget(_lbl("止盈触发（%，盈利达到）", _MUT))
+        self._tp_sp = QtWidgets.QDoubleSpinBox()
+        self._tp_sp.setRange(0.0, 200.0)
+        self._tp_sp.setValue(15.0)
+        self._tp_sp.setSingleStep(1.0)
+        self._tp_sp.setDecimals(1)
+        self._tp_sp.setStyleSheet(_SPIN_SS)
+        self._tp_sp.setToolTip("盈利达到N%后，启动追踪止盈（0=不启用）")
+        v.addWidget(self._tp_sp)
+
+        v.addWidget(_lbl("追踪止盈回撤（%，从最高点）", _MUT))
+        self._tp_trail_sp = QtWidgets.QDoubleSpinBox()
+        self._tp_trail_sp.setRange(0.0, 50.0)
+        self._tp_trail_sp.setValue(10.0)
+        self._tp_trail_sp.setSingleStep(1.0)
+        self._tp_trail_sp.setDecimals(1)
+        self._tp_trail_sp.setStyleSheet(_SPIN_SS)
+        self._tp_trail_sp.setToolTip("触发止盈后，从最高点回撤N%时卖出")
+        v.addWidget(self._tp_trail_sp)
+
+        v.addWidget(_lbl("止损触发（%，亏损达到）", _MUT))
+        self._sl_sp = QtWidgets.QDoubleSpinBox()
+        self._sl_sp.setRange(0.0, 50.0)
+        self._sl_sp.setValue(7.0)
+        self._sl_sp.setSingleStep(0.5)
+        self._sl_sp.setDecimals(1)
+        self._sl_sp.setStyleSheet(_SPIN_SS)
+        self._sl_sp.setToolTip("亏损达到N%时止损卖出（0=不启用）")
+        v.addWidget(self._sl_sp)
 
         v.addWidget(_lbl("最少K线数（过滤新股）", _MUT))
         self._minbars_sp = QtWidgets.QSpinBox()
@@ -485,6 +529,9 @@ class BehaviorEditorTab(QtWidgets.QWidget):
             "sort_by":    self._sort_cb.currentData(),
             "sort_desc":  self._sort_desc_chk.isChecked(),
             "hold_days":  self._hold_sp.value(),
+            "take_profit":       self._tp_sp.value(),
+            "trail_drawdown":    self._tp_trail_sp.value(),
+            "stop_loss":         self._sl_sp.value(),
             "min_bars":   self._minbars_sp.value(),
             "comm_rate":   self._comm_sp.value()  / 10000,
             "stamp_rate":  self._stamp_sp.value() / 10000,

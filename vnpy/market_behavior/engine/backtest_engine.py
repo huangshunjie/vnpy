@@ -180,19 +180,27 @@ class BacktestEngine:
         symbol:    str,
         all_bars:  List[CandleBar],
         spec:      ScreenSpec,
-        hold_days: int = 0,
-        commission_rate: float = None,   # 买入手续费率，默认读 DEFAULT_CFG
-        stamp_duty_rate: float = None,   # 卖出印花税率，默认读 DEFAULT_CFG
-        slippage_rate:   float = None,   # 买卖总滑点，默认读 DEFAULT_CFG
+        hold_days:       int   = 0,
+        commission_rate: float = None,
+        stamp_duty_rate: float = None,
+        slippage_rate:   float = None,
+        take_profit:     float = 0.0,    # 止盈触发收益率（%），0=不启用
+        trail_drawdown:  float = 0.0,    # 追踪止盈回撤（%），0=不启用
+        stop_loss:       float = 0.0,    # 止损触发亏损（%），0=不启用
     ) -> BacktestResult:
         """
         逐根回放 all_bars，在每根K线末尾用 AdapterEngine 评估条件。
         记录触发点，计算持有收益，返回 BacktestResult。
         """
-        hold = hold_days or self._cfg["hold_days"]
+        hold  = hold_days or self._cfg["hold_days"]
         comm  = commission_rate if commission_rate is not None else self._cfg["commission_rate"]
         stamp = stamp_duty_rate if stamp_duty_rate is not None else self._cfg["stamp_duty_rate"]
         slip  = slippage_rate   if slippage_rate   is not None else self._cfg["slippage_rate"]
+        # 止盈止损参数注入 cfg，供 _fill_forward_returns 读取
+        cfg   = dict(self._cfg)
+        cfg["take_profit"]    = take_profit
+        cfg["trail_drawdown"] = trail_drawdown
+        cfg["stop_loss"]      = stop_loss
         warmup = self._cfg["warmup_bars"]
         bt_id  = uuid.uuid4().hex[:10]
 
@@ -240,7 +248,11 @@ class BacktestEngine:
                 in_hold_until = i + hold
 
         # 计算持有收益
-        self._fill_forward_returns(triggers, all_bars, [hold], comm, stamp, slip)
+        tp       = cfg.get("take_profit",    0.0)
+        trail    = cfg.get("trail_drawdown", 0.0)
+        sl       = cfg.get("stop_loss",      0.0)
+        self._fill_forward_returns(triggers, all_bars, [hold],
+                                   comm, stamp, slip, tp, trail, sl)
 
         # 统计指标
         metrics = self._calc_metrics(triggers, hold, len(all_bars))
@@ -259,29 +271,88 @@ class BacktestEngine:
 
     @staticmethod
     def _fill_forward_returns(
-        triggers:  List[TriggerRecord],
-        all_bars:  List[CandleBar],
-        hold_days: List[int],
+        triggers:        List[TriggerRecord],
+        all_bars:        List[CandleBar],
+        hold_days:       List[int],
         commission_rate: float = 0.0,
         stamp_duty_rate: float = 0.0,
         slippage_rate:   float = 0.0,
+        take_profit:     float = 0.0,
+        trail_drawdown:  float = 0.0,
+        stop_loss:       float = 0.0,
     ) -> None:
-        """为每条触发记录填充各持有天数的收益率。"""
+        """
+        为每条触发记录填充持有收益率，支持动态止盈止损。
+
+        take_profit > 0：盈利达到 take_profit% 后启动追踪止盈
+        trail_drawdown > 0：触发止盈后，从最高点回撤 trail_drawdown% 卖出
+        stop_loss > 0：亏损达到 stop_loss% 时止损卖出
+        hold_days[-1]：最大持仓天数兜底
+        """
+        cost_total = commission_rate + stamp_duty_rate + slippage_rate
+        use_dynamic = (take_profit > 0 or stop_loss > 0)
+        max_hold = max(hold_days) if hold_days else 20
+
         for rec in triggers:
-            i = rec.trigger_bar
+            i  = rec.trigger_bar
             p0 = rec.trigger_price
             if p0 <= 0:
                 continue
-            for h in hold_days:
-                j = i + h
-                if j < len(all_bars):
-                    pn = all_bars[j].close
-                else:
-                    pn = all_bars[-1].close
-                cost = commission_rate + stamp_duty_rate + slippage_rate
-                raw_return = (pn - p0) / p0
-                rec.forward_returns[h] = raw_return - cost
-                rec.gross_returns[h]   = raw_return
+
+            if use_dynamic:
+                # ── 逐天模拟持仓 ──────────────────────────────────
+                peak_price    = p0          # 持仓期间最高价（用于追踪止盈）
+                tp_activated  = False       # 是否已触发止盈激活
+                exit_bar      = min(i + max_hold, len(all_bars) - 1)
+                exit_price    = all_bars[exit_bar].close
+                exit_reason   = "max_hold"
+
+                for k in range(i + 1, min(i + max_hold + 1, len(all_bars))):
+                    bar   = all_bars[k]
+                    price = bar.close
+                    ret   = (price - p0) / p0 * 100   # 当前收益率 %
+
+                    # 更新最高价
+                    if price > peak_price:
+                        peak_price = price
+
+                    # 止损检查
+                    if stop_loss > 0 and ret <= -stop_loss:
+                        exit_price  = price
+                        exit_bar    = k
+                        exit_reason = "stop_loss"
+                        break
+
+                    # 止盈激活检查
+                    if take_profit > 0 and ret >= take_profit:
+                        tp_activated = True
+
+                    # 追踪止盈检查（已激活且从最高点回撤超阈值）
+                    if tp_activated and trail_drawdown > 0:
+                        drawdown = (peak_price - price) / peak_price * 100
+                        if drawdown >= trail_drawdown:
+                            exit_price  = price
+                            exit_bar    = k
+                            exit_reason = "take_profit"
+                            break
+
+                raw_return = (exit_price - p0) / p0
+                rec.details["exit_reason"] = exit_reason
+                rec.details["exit_bar"]    = exit_bar
+                rec.details["hold_actual"] = exit_bar - i
+
+                for h in hold_days:
+                    rec.forward_returns[h] = raw_return - cost_total
+                    rec.gross_returns[h]   = raw_return
+
+            else:
+                # ── 原有逻辑：固定持有天数 ────────────────────────
+                for h in hold_days:
+                    j = i + h
+                    pn = all_bars[j].close if j < len(all_bars) else all_bars[-1].close
+                    raw_return = (pn - p0) / p0
+                    rec.forward_returns[h] = raw_return - cost_total
+                    rec.gross_returns[h]   = raw_return
     def _calc_metrics(
         self,
         triggers:   List[TriggerRecord],

@@ -177,10 +177,37 @@ class ScanWorker(QtCore.QThread):
                                                 vol_mult=max(thr, 1.0),
                                                 min_chg=3.0, weight=wt))
             elif ct == "trend_slope":
-                # thr = 最小斜率（%/天），默认 0.1
                 conds.append(ae.build_condition(ct, ma_period=20,
                                                 slope_window=max(int(win/2), 5),
                                                 min_slope=thr, weight=wt))
+            elif ct == "macd_golden":
+                conds.append(ae.build_condition(ct, weight=wt))
+            elif ct == "macd_death":
+                conds.append(ae.build_condition(ct, weight=wt))
+            elif ct == "weekly_ma_slope":
+                conds.append(ae.build_condition(
+                    ct, ma_period=13, slope_window=5,
+                    min_slope=max(thr, 0.0), weight=wt,
+                    multi_tf_engine=getattr(ae, "_multi_tf", None)))
+            elif ct == "pullback":
+                # thr = 负数跌幅下限，如 -5 代表至多下跌5%
+                # mode 默认 pct_drop；窗口用 win
+                conds.append(ae.build_condition(
+                    ct, mode="pct_drop", window=win,
+                    min_drop=min(thr, -0.5),
+                    max_drop=0.0, weight=wt))
+            elif ct == "rsi_range":
+                # thr = RSI 下限，上限固定 80
+                conds.append(ae.build_condition(
+                    ct, period=14,
+                    min=max(thr, 0.0), max=80.0, weight=wt))
+            elif ct == "boll_width":
+                conds.append(ae.build_condition(
+                    ct, period=20, std_mult=2.0,
+                    min=thr, weight=wt))
+            elif ct == "atr_ratio":
+                conds.append(ae.build_condition(
+                    ct, period=14, min=thr, weight=wt))
             else:
                 conds.append(ae.build_condition(ct, min=thr, weight=wt))
         return conds
@@ -309,10 +336,14 @@ class BacktestWorker(QtCore.QThread):
             spec   = ae.build_spec("回测", conditions=conds,
                                     require_all=cfg.get("require_all", True))
             self.sig_progress.emit(70, f"回测中（持有 {hold} 天）...")
-            result = be.run(sym, bars, spec, hold_days=hold,
-                           commission_rate=cfg.get("comm_rate",  0.0003),
-                           stamp_duty_rate=cfg.get("stamp_rate", 0.0010),
-                           slippage_rate=  cfg.get("slip_rate",  0.0002))
+            result = be.run(sym, bars, spec,
+                           hold_days=      hold,
+                           commission_rate=cfg.get("comm_rate",       0.0003),
+                           stamp_duty_rate=cfg.get("stamp_rate",      0.0010),
+                           slippage_rate=  cfg.get("slip_rate",       0.0002),
+                           take_profit=    cfg.get("take_profit",     0.0),
+                           trail_drawdown= cfg.get("trail_drawdown",  0.0),
+                           stop_loss=      cfg.get("stop_loss",       0.0))
             report = be.report(result)
 
             self.sig_progress.emit(100, f"完成，触发 {report['trigger_count']} 次")
