@@ -37,6 +37,12 @@ COND_VOLATILITY      = "volatility"
 COND_LABEL           = "label"
 COND_CONTINUOUS      = "continuous"
 COND_CUSTOM          = "custom"
+# ── Phase 10.1 新增条件 ───────────────────────────────────────────────
+COND_RETURN_N_DAYS        = "return_n_days"
+COND_NEW_HIGH_N           = "new_high_n"
+COND_MA_ALIGNMENT         = "ma_alignment"
+COND_VOLUME_PRICE_CONFIRM = "volume_price_confirm"
+COND_TREND_SLOPE          = "trend_slope"
 
 
 class ScreenCondition:
@@ -502,6 +508,80 @@ class AdapterEngine:
                     return False, 0.0
 
         return False, 0.0
+
+        # Phase 10.1: N日累计收益率
+        if ct == COND_RETURN_N_DAYS:
+            window  = int(p.get("window", 20))
+            min_ret = float(p.get("min", 10.0))
+            max_ret = float(p.get("max", 9999.0))
+            if len(bars) < 2:
+                return False, 0.0
+            wb      = bars[-window:] if len(bars) >= window else bars
+            ret_pct = (wb[-1].close - wb[0].close) / wb[0].close * 100 if wb[0].close > 0 else 0.0
+            passed  = min_ret <= ret_pct <= max_ret
+            score   = min(max(ret_pct / (min_ret * 2 if min_ret > 0 else 20), 0.0), 1.0)
+            return passed, score if passed else 0.0
+
+        # Phase 10.1: N日新高突破
+        if ct == COND_NEW_HIGH_N:
+            window    = int(p.get("window", 60))
+            if len(bars) < 2:
+                return False, 0.0
+            history   = bars[-window:]
+            prev_high = max(b.high for b in history[:-1]) if len(history) > 1 else history[-1].high
+            cur_close = bars[-1].close
+            passed    = cur_close >= prev_high
+            score     = min(max((cur_close - prev_high) / prev_high * 10 + 0.5, 0.0), 1.0) if prev_high > 0 else 0.0
+            return passed, score if passed else 0.0
+
+        # Phase 10.1: 均线多头排列
+        if ct == COND_MA_ALIGNMENT:
+            periods = p.get("periods", [5, 10, 20, 60])
+            closes  = [b.close for b in bars]
+            if len(closes) < max(periods):
+                return False, 0.0
+            mas    = [sum(closes[-period:]) / period for period in periods]
+            passed = all(mas[i] > mas[i + 1] for i in range(len(mas) - 1))
+            if not passed:
+                return False, 0.0
+            gaps  = [(mas[i] - mas[i+1]) / mas[i+1] for i in range(len(mas)-1) if mas[i+1] > 0]
+            score = min(min(gaps) * 20, 1.0) if gaps else 0.5
+            return True, max(score, 0.1)
+
+        # Phase 10.1: 放量上涨确认
+        if ct == COND_VOLUME_PRICE_CONFIRM:
+            vol_window = int(p.get("vol_window", 20))
+            vol_mult   = float(p.get("vol_mult", 1.5))
+            min_chg    = float(p.get("min_chg", 3.0))
+            if len(bars) < vol_window + 1:
+                return False, 0.0
+            cur     = bars[-1]
+            avg_vol = sum(b.volume for b in bars[-(vol_window+1):-1]) / vol_window
+            if avg_vol <= 0:
+                return False, 0.0
+            vol_ratio = cur.volume / avg_vol
+            passed    = cur.change_pct >= min_chg and vol_ratio >= vol_mult
+            score     = min((vol_ratio / (vol_mult * 2)) * (cur.change_pct / (min_chg * 2)), 1.0)
+            return passed, max(score, 0.0) if passed else 0.0
+
+        # Phase 10.1: MA趋势斜率
+        if ct == COND_TREND_SLOPE:
+            ma_period    = int(p.get("ma_period", 20))
+            slope_window = int(p.get("slope_window", 10))
+            min_slope    = float(p.get("min_slope", 0.0))
+            closes       = [b.close for b in bars]
+            if len(closes) < ma_period + slope_window:
+                return False, 0.0
+            ma_series = [sum(closes[i-ma_period:i]) / ma_period
+                         for i in range(len(closes)-slope_window+1, len(closes)+1)
+                         if i >= ma_period]
+            if len(ma_series) < 2:
+                return False, 0.0
+            base  = ma_series[0] if ma_series[0] > 0 else 1.0
+            slope = (ma_series[-1] - ma_series[0]) / (len(ma_series) - 1) / base * 100
+            passed = slope >= min_slope
+            score  = min(max((slope - min_slope) / (abs(min_slope) + 0.5), 0.0), 1.0)
+            return passed, score if passed else 0.0
 
     # ── 工具方法 ──────────────────────────────────────────────────────
 

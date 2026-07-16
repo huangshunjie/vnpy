@@ -1,4 +1,4 @@
-﻿"""
+"""
 market_behavior/ui/widget.py  —  主窗口 + Worker 线程（完整实现）
 """
 from __future__ import annotations
@@ -164,7 +164,23 @@ class ScanWorker(QtCore.QThread):
                                                 window=win, min=1, weight=wt))
             elif ct == "continuous":
                 conds.append(ae.build_condition(ct, kind="rise",
-                                                days=max(1,int(thr)), weight=wt))
+                                                days=max(1, int(thr)), weight=wt))
+            elif ct == "return_n_days":
+                conds.append(ae.build_condition(ct, window=win, min=thr, weight=wt))
+            elif ct == "new_high_n":
+                conds.append(ae.build_condition(ct, window=win, weight=wt))
+            elif ct == "ma_alignment":
+                conds.append(ae.build_condition(ct, weight=wt))
+            elif ct == "volume_price_confirm":
+                # thr = 放量倍数（默认 1.5）
+                conds.append(ae.build_condition(ct, vol_window=win,
+                                                vol_mult=max(thr, 1.0),
+                                                min_chg=3.0, weight=wt))
+            elif ct == "trend_slope":
+                # thr = 最小斜率（%/天），默认 0.1
+                conds.append(ae.build_condition(ct, ma_period=20,
+                                                slope_window=max(int(win/2), 5),
+                                                min_slope=thr, weight=wt))
             else:
                 conds.append(ae.build_condition(ct, min=thr, weight=wt))
         return conds

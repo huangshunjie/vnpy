@@ -1,4 +1,4 @@
-﻿"""
+"""
 market_behavior/ui/behavior_editor.py  —  行为条件编辑器 Tab
 """
 from __future__ import annotations
@@ -50,16 +50,38 @@ _DE_SS    = (f"QDateEdit{{background:{_PAN2};color:{_FG};border:1px solid {_BORD
              f"border-radius:4px;padding:4px;font-size:14px;}}")
 _CHK_SS   = f"QCheckBox{{color:{_FG};font-size:14px;background:transparent;border:none;}}"
 
-COND_OPTIONS = [
-    ("综合强度  kline_strength", "kline_strength", 0.40, "0−1得分", "越接0满分，越接1越强"),
-    ("上涨天数  rise_days",      "rise_days",      0.50, "0−1比率", "0.5 = 窗口内至少50%天收涨"),
-    ("大涨次数  rise_pct",       "rise_pct",       3.00, "% 涨幅",   "3.0 = 单日涨幅≥3%，至少出现1次"),
-    ("大阳线数  big_yang_count", "big_yang_count", 2.00, "次（根）",   "2.0 = 窗口内至少出现2根大阳线"),
-    ("涨停次数  limit_up_count", "limit_up_count", 1.00, "次数",     "1.0 = 窗口内至少涨停1次"),
-    ("突破次数  breakout_count", "breakout_count", 3.00, "次数",     "3.0 = 窗口内突破新高/均线≥3次"),
-    ("波动强度  volatility",     "volatility",     2.00, "% 振幅",   "2.0 = 日均振幅≥2%"),
-    ("连续上涨  continuous",     "continuous",     3.00, "天数",     "3.0 = 末尾连续收涨≥3天"),
+# ── 条件分组（Phase 10.1）format: (label, cond_type, default, unit, hint)
+COND_GROUPS = [
+    ("📈 趋势行为  Trend", [
+        ("  连续上涨  continuous",    "continuous",    3.00, "天数",     "末尾连续收涨 >= N 天"),
+        ("  上涨天数  rise_days",     "rise_days",     0.50, "0-1比率",  "窗口内上涨天数占比 >= N"),
+        ("  均线多头  ma_alignment",  "ma_alignment",  0.00, "（无阈值）", "MA5>MA10>MA20>MA60 多头排列"),
+        ("  趋势斜率  trend_slope",   "trend_slope",   0.10, "% / 天",   "MA20斜率 >= N%/天，正值代表上升"),
+    ]),
+    ("🔥 强势行为  Momentum", [
+        ("  综合强度  kline_strength","kline_strength", 0.40, "0-1得分",  "行为因子综合强度 >= N"),
+        ("  大涨次数  rise_pct",      "rise_pct",       3.00, "% 涨幅",   "单日涨幅 >= N%，窗口内至少1次"),
+        ("  N日收益   return_n_days", "return_n_days", 10.00, "% 收益",   "过去N日累计涨幅 >= N%"),
+    ]),
+    ("🚀 突破行为  Breakout", [
+        ("  突破次数  breakout_count","breakout_count", 3.00, "次数",     "窗口内突破新高/均线 >= N次"),
+        ("  新高突破  new_high_n",    "new_high_n",     0.00, "（无阈值）", "收盘价突破N日最高价"),
+    ]),
+    ("🕯 K线形态  Pattern", [
+        ("  大阳线数  big_yang_count","big_yang_count", 2.00, "次（根）",  "窗口内大阳线根数 >= N"),
+    ]),
+    ("📊 量价行为  Volume", [
+        ("  放量上涨  volume_price_confirm","volume_price_confirm",1.50,"倍（均量）","涨幅>=3%且成交量>=均量N倍"),
+    ]),
+    ("🔥 涨停行为  Limit", [
+        ("  涨停次数  limit_up_count","limit_up_count", 1.00, "次数",     "窗口内涨停次数 >= N"),
+    ]),
+    ("🌊 波动行为  Volatility", [
+        ("  波动强度  volatility",    "volatility",     2.00, "% 振幅",   "日均振幅 >= N%"),
+    ]),
 ]
+# 向后兼容
+COND_OPTIONS = [item for _, group in COND_GROUPS for item in group]
 
 
 class ConditionRow(QtWidgets.QWidget):
@@ -75,8 +97,17 @@ class ConditionRow(QtWidgets.QWidget):
         self.cond_type = QtWidgets.QComboBox()
         self.cond_type.setStyleSheet(_COMBO_SS)
         self.cond_type.setFixedWidth(270)
-        for label, val, default, unit, hint in COND_OPTIONS:
-            self.cond_type.addItem(label, (val, unit, hint))
+        for group_name, items in COND_GROUPS:
+            # 分组标题（灰色、不可选）
+            self.cond_type.addItem(group_name, None)
+            header_idx = self.cond_type.count() - 1
+            item = self.cond_type.model().item(header_idx)
+            item.setEnabled(False)
+            from vnpy.trader.ui import QtGui as _QtGui
+            item.setForeground(_QtGui.QColor("#6c7086"))
+            # 分组内条件
+            for label, val, default, unit, hint in items:
+                self.cond_type.addItem(label, (val, default, unit, hint))
         self.cond_type.currentIndexChanged.connect(self._on_type_changed)
         lay.addWidget(self.cond_type)
 
@@ -114,7 +145,20 @@ class ConditionRow(QtWidgets.QWidget):
         self._on_type_changed(0)
 
     def _on_type_changed(self, idx):
-        _, _, default, unit, hint = COND_OPTIONS[idx]
+        data = self.cond_type.currentData()
+        if data is None:
+            # 选中了分组标题，自动跳到下一个可选项
+            next_idx = idx + 1
+            while next_idx < self.cond_type.count():
+                if self.cond_type.itemData(next_idx) is not None:
+                    self.cond_type.setCurrentIndex(next_idx)
+                    return
+                next_idx += 1
+            return
+        data = self.cond_type.currentData()
+        if data is None:
+            return
+        _, default, unit, hint = data
         self.threshold.setValue(default)
         self._hint_lbl.setText(f"[单位:{unit}]  {hint}")
 
