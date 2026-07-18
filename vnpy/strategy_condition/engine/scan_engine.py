@@ -1,0 +1,205 @@
+"""
+strategy_condition/engine/scan_engine.py
+
+选股引擎 + 逐日持仓模拟（止盈止损）。
+复用 market_behavior 的 CandleBuffer / DatabaseLoader，不重复拉取数据。
+
+参数统一原则：
+  卖出阈值（止损 / 止盈 / 追踪 / 最大持仓）统一使用 strategy.params，
+  条件树节点自身的 params 仅作备用（当 strategy_params=None 时）。
+"""
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+
+from ..constant import SignalType, SignalSource
+from ..core.condition_tree import ConditionNode
+from ..core.signal import SignalRecord, SignalBatch
+from ..core.strategy import Strategy, StrategyParams
+from .condition_engine import ConditionEngine
+
+
+class ScanEngine:
+
+    def __init__(self, condition_engine: ConditionEngine,
+                 candle_buffer=None, log_fn=None):
+        self._ce  = condition_engine
+        self._buf = candle_buffer
+        self._log = log_fn or print
+
+    def set_candle_buffer(self, buf) -> None:
+        self._buf = buf
+        self._ce.set_candle_buffer(buf)
+
+    # ── 截面扫描（实时选股） ──────────────────────────────────────────
+
+    def scan(self, symbols: List[str], strategy: Strategy,
+             n_bars: int = 300,
+             _bars_dict: Optional[Dict[str, list]] = None) -> SignalBatch:
+        batch = SignalBatch(
+            batch_id=uuid.uuid4().hex[:10],
+            strategy_name=strategy.name,
+            source=SignalSource.SCAN,
+            run_dt=datetime.now(),
+            params={"n_bars": n_bars, "symbols": len(symbols)},
+        )
+        eval_fn = self._ce.eval_condition
+        for sym in symbols:
+            bars = _bars_dict.get(sym, []) if _bars_dict is not None \
+                   else self._get_bars(sym, n_bars)
+            if len(bars) < strategy.params.min_bars:
+                continue
+            passed, score = strategy.buy_tree.evaluate(sym, bars, eval_fn)
+            if not passed:
+                continue
+            batch.signals.append(SignalRecord(
+                signal_id=uuid.uuid4().hex[:10],
+                signal_type=SignalType.BUY,
+                source=SignalSource.SCAN,
+                symbol=sym,
+                dt=getattr(bars[-1], "dt", datetime.now()),
+                price=bars[-1].close,
+                score=round(score, 4),
+                strategy_name=strategy.name,
+            ))
+        batch.signals.sort(key=lambda s: s.score, reverse=True)
+        self._log(f"[ScanEngine] {strategy.name}: {len(symbols)} 股 → {batch.count} 信号")
+        return batch
+
+    # ── 历史回测 ──────────────────────────────────────────────────────
+
+    def backtest(self, symbols: List[str], strategy: Strategy,
+                 all_bars_dict: Dict[str, list],
+                 warmup: int = 60) -> SignalBatch:
+        """
+        对每个 symbol 的全量 K 线做逐日滚动回测。
+        卖出阈值统一来自 strategy.params。
+        """
+        batch = SignalBatch(
+            batch_id=uuid.uuid4().hex[:10],
+            strategy_name=strategy.name,
+            source=SignalSource.BACKTEST,
+            run_dt=datetime.now(),
+            params={"warmup": warmup, "symbols": len(symbols)},
+        )
+        for sym in symbols:
+            bars = all_bars_dict.get(sym, [])
+            if len(bars) < warmup + 2:
+                continue
+            signals = self._backtest_symbol(sym, bars, strategy, warmup)
+            batch.signals.extend(signals)
+        self._log(f"[ScanEngine] backtest {strategy.name}: "
+                  f"{len(symbols)} 股 → {batch.count} 信号")
+        return batch
+
+    def _backtest_symbol(self, symbol: str, all_bars: list,
+                         strategy: Strategy, warmup: int) -> List[SignalRecord]:
+        """
+        逐日滚动回测单只股票。
+        所有止损/止盈/追踪/持仓上限阈值统一从 strategy.params 读取，
+        并透传给 eval_exit，彻底消除双参数体系的不一致。
+        """
+        signals: List[SignalRecord] = []
+        eval_fn = self._ce.eval_condition
+        sp      = strategy.params          # 唯一参数源
+        cost    = sp.commission_rate + sp.stamp_duty_rate + sp.slippage_rate
+
+        i = warmup
+        while i < len(all_bars) - 1:
+            bars_so_far = all_bars[:i + 1]
+            passed, score = strategy.buy_tree.evaluate(symbol, bars_so_far, eval_fn)
+            if not passed:
+                i += 1
+                continue
+
+            entry_bar   = all_bars[i]
+            entry_price = entry_bar.close
+            rec = SignalRecord(
+                signal_id=uuid.uuid4().hex[:10],
+                signal_type=SignalType.BUY,
+                source=SignalSource.BACKTEST,
+                symbol=symbol,
+                dt=getattr(entry_bar, "dt", datetime.now()),
+                price=entry_price,
+                score=round(score, 4),
+                strategy_name=strategy.name,
+            )
+
+            peak_price  = entry_price
+            # 持仓上限用 strategy.params.max_hold_days
+            max_j       = min(i + sp.max_hold_days, len(all_bars) - 1)
+            exit_bar    = max_j
+            exit_price  = all_bars[max_j].close
+            exit_reason = "max_hold"
+            hold_days   = 0
+
+            for j in range(i + 1, max_j + 1):
+                cur_price = all_bars[j].close
+                hold_days = j - i
+                if cur_price > peak_price:
+                    peak_price = cur_price
+
+                triggered, _ = self._eval_sell_tree(
+                    strategy.sell_tree, symbol, entry_price,
+                    cur_price, peak_price, hold_days,
+                    all_bars[:j + 1], sp,
+                )
+                if triggered:
+                    exit_bar    = j
+                    exit_price  = cur_price
+                    exit_reason = self._exit_reason(
+                        strategy.sell_tree, entry_price,
+                        cur_price, peak_price, hold_days,
+                        all_bars[:j + 1], sp,
+                    )
+                    break
+
+            raw_ret         = (exit_price - entry_price) / entry_price if entry_price > 0 else 0.0
+            rec.exit_price  = exit_price
+            rec.exit_dt     = getattr(all_bars[exit_bar], "dt", None)
+            rec.exit_reason = exit_reason
+            rec.hold_days   = hold_days
+            rec.pnl_pct     = raw_ret - cost
+
+            signals.append(rec)
+            i = exit_bar + 1
+
+        return signals
+
+    def _eval_sell_tree(self, sell_tree: ConditionNode, symbol: str,
+                        entry_price: float, cur_price: float,
+                        peak_price: float, hold_days: int,
+                        bars: list,
+                        sp: Optional[StrategyParams] = None) -> Tuple[bool, float]:
+        """
+        评估卖出条件树（OR 语义）。
+        sp: strategy.params — 透传给 eval_exit 作为阈值参数源。
+        """
+        return sell_tree.evaluate(
+            symbol, bars,
+            lambda cond, sym, b: self._ce.eval_exit(
+                cond, entry_price, cur_price, peak_price, hold_days, b, sp),
+        )
+
+    def _exit_reason(self, sell_tree: ConditionNode, entry_price: float,
+                     cur_price: float, peak_price: float,
+                     hold_days: int, bars: list,
+                     sp: Optional[StrategyParams] = None) -> str:
+        for cond in sell_tree.all_conditions():
+            passed, _ = self._ce.eval_exit(
+                cond, entry_price, cur_price, peak_price, hold_days, bars, sp)
+            if passed:
+                return cond.indicator.value.lower()
+        return "sell_tree"
+
+    # ── 数据获取 ──────────────────────────────────────────────────────
+
+    def _get_bars(self, symbol: str, n: int) -> list:
+        if self._buf is None:
+            return []
+        try:
+            return self._buf.get(symbol, n) or []
+        except Exception:
+            return []

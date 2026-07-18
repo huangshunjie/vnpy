@@ -25,7 +25,7 @@ APP_GROUPS: List[Tuple[str, str, str, List[str]]] = [
     ]),
     ("研究平台", "🔬", "#13c2c2", [
         "BatchResearch", "FactorResearch", "ResearchValidation",
-        "QuantResearch", "ResearchOps",
+        "QuantResearch", "ResearchOps", "StrategyCondition",
     ]),
     ("AI 智能", "🤖", "#722ed1", [
         "AlphaFactory2", "CapitalAllocation", "MarketRegime",
