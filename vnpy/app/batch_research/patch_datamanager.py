@@ -11,6 +11,7 @@ from vnpy.trader.object import HistoryRequest
 from vnpy.trader.ui import QtCore, QtWidgets
 
 from .ui.bulk_download_dialog import BulkDownloadDialog
+from .ui.index_download_dialog import IndexDownloadDialog
 
 _A_SHARE_EXCHANGES = {Exchange.SSE, Exchange.SZSE, Exchange.BSE}
 
@@ -43,6 +44,11 @@ def _bulk_download(self: ManagerWidget) -> None:
     dlg.exec_()
 
 
+def _index_download(self: ManagerWidget) -> None:
+    dlg = IndexDownloadDialog(parent=self)
+    dlg.exec_()
+
+
 def _patched_init_ui(self: ManagerWidget) -> None:
     _original_init_ui(self)
     main_layout: QtWidgets.QVBoxLayout = self.layout()
@@ -52,6 +58,11 @@ def _patched_init_ui(self: ManagerWidget) -> None:
     bulk_btn.setToolTip("从 Tushare 批量下载全 A 股日线数据到本地数据库")
     bulk_btn.clicked.connect(lambda: _bulk_download(self))
     hbox.addWidget(bulk_btn)
+
+    index_btn = QtWidgets.QPushButton("下载指数")
+    index_btn.setToolTip("从 Tushare 批量下载 A 股所有指数日线数据到本地数据库")
+    index_btn.clicked.connect(lambda: _index_download(self))
+    hbox.addWidget(index_btn)
 
     export_all_btn = QtWidgets.QPushButton("导出全部")
     export_all_btn.setToolTip("将数据库中所有 K 线数据导出为 CSV 文件（每只股票一个文件）")
