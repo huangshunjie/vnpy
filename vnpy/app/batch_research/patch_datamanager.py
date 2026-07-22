@@ -12,6 +12,7 @@ from vnpy.trader.ui import QtCore, QtWidgets
 
 from .ui.bulk_download_dialog import BulkDownloadDialog
 from .ui.index_download_dialog import IndexDownloadDialog
+from .ui.minute_import_dialog import MinuteImportDialog
 
 _A_SHARE_EXCHANGES = {Exchange.SSE, Exchange.SZSE, Exchange.BSE}
 
@@ -49,6 +50,11 @@ def _index_download(self: ManagerWidget) -> None:
     dlg.exec_()
 
 
+def _minute_import(self: ManagerWidget) -> None:
+    dlg = MinuteImportDialog(parent=self)
+    dlg.exec_()
+
+
 def _patched_init_ui(self: ManagerWidget) -> None:
     _original_init_ui(self)
     main_layout: QtWidgets.QVBoxLayout = self.layout()
@@ -63,6 +69,11 @@ def _patched_init_ui(self: ManagerWidget) -> None:
     index_btn.setToolTip("从 Tushare 批量下载 A 股所有指数日线数据到本地数据库")
     index_btn.clicked.connect(lambda: _index_download(self))
     hbox.addWidget(index_btn)
+
+    minute_btn = QtWidgets.QPushButton("导入分钟线")
+    minute_btn.setToolTip("从本地分钟线数据包批量导入到数据库（支持1/5/15/30/60分钟）")
+    minute_btn.clicked.connect(lambda: _minute_import(self))
+    hbox.addWidget(minute_btn)
 
     export_all_btn = QtWidgets.QPushButton("导出全部")
     export_all_btn.setToolTip("将数据库中所有 K 线数据导出为 CSV 文件（每只股票一个文件）")
@@ -381,9 +392,135 @@ def _export_all(self: ManagerWidget) -> None:
         worker.wait(5000)
 
 
+def _patched_delete_data(
+    self: ManagerWidget,
+    symbol: str,
+    exchange: Exchange,
+    interval: Interval,
+) -> None:
+    """删除数据后自动刷新树形列表。"""
+    n = QtWidgets.QMessageBox.warning(
+        self,
+        "删除确认",
+        f"确认是否要删除 {symbol} {exchange.value} {interval.value} 的全部数据？",
+        QtWidgets.QMessageBox.StandardButton.Ok,
+        QtWidgets.QMessageBox.StandardButton.Cancel,
+    )
+    if n == QtWidgets.QMessageBox.StandardButton.Cancel:
+        return
+
+    count: int = self.engine.delete_bar_data(symbol, exchange, interval)
+
+    QtWidgets.QMessageBox.information(
+        self,
+        "删除成功",
+        f"已删除 {symbol} {exchange.value} {interval.value} 共 {count} 条数据",
+        QtWidgets.QMessageBox.StandardButton.Ok,
+    )
+
+    # 自动刷新树形列表
+    self.refresh_tree()
+
+
+_INTERVAL_NAME_MAP_FULL = {
+    Interval.MINUTE:    "1分钟线",
+    Interval.MINUTE_5:  "5分钟线",
+    Interval.MINUTE_15: "15分钟线",
+    Interval.MINUTE_30: "30分钟线",
+    Interval.HOUR:      "小时线",
+    Interval.DAILY:     "日线",
+    Interval.WEEKLY:    "周线",
+}
+
+_INTERVAL_DISPLAY_ORDER = [
+    Interval.MINUTE,
+    Interval.MINUTE_5,
+    Interval.MINUTE_15,
+    Interval.MINUTE_30,
+    Interval.HOUR,
+    Interval.DAILY,
+    Interval.WEEKLY,
+]
+
+
+def _patched_refresh_tree(self: ManagerWidget) -> None:
+    from functools import partial
+    from vnpy_datamanager.engine import BarOverview
+
+    self.tree.clear()
+
+    interval_childs: dict[Interval, QtWidgets.QTreeWidgetItem] = {}
+    exchange_childs: dict[tuple, QtWidgets.QTreeWidgetItem] = {}
+
+    overviews: list[BarOverview] = self.engine.get_bar_overview()
+    overviews.sort(key=lambda x: x.symbol)
+
+    # 收集本次数据中实际出现的 interval，按显示顺序建节点
+    present_intervals = {ov.interval for ov in overviews}
+    for interval in _INTERVAL_DISPLAY_ORDER:
+        if interval not in present_intervals:
+            continue
+        interval_child = QtWidgets.QTreeWidgetItem()
+        interval_child.setText(0, _INTERVAL_NAME_MAP_FULL.get(interval, interval.value))
+        interval_childs[interval] = interval_child
+
+    for overview in overviews:
+        if overview.interval not in interval_childs:
+            # 兜底：处理不在预定义列表里的 interval
+            interval_child = QtWidgets.QTreeWidgetItem()
+            interval_child.setText(0, overview.interval.value)
+            interval_childs[overview.interval] = interval_child
+
+        key = (overview.interval, overview.exchange)
+        exchange_child = exchange_childs.get(key)
+        if not exchange_child:
+            interval_child = interval_childs[overview.interval]
+            exchange_child = QtWidgets.QTreeWidgetItem(interval_child)
+            exchange_child.setText(0, overview.exchange.value)
+            exchange_childs[key] = exchange_child
+
+        item = QtWidgets.QTreeWidgetItem(exchange_child)
+        item.setText(1, f"{overview.symbol}.{overview.exchange.value}")
+        item.setText(2, overview.symbol)
+        item.setText(3, overview.exchange.value)
+        item.setText(4, str(overview.count))
+        item.setText(5, overview.start.strftime("%Y-%m-%d %H:%M:%S"))
+        item.setText(6, overview.end.strftime("%Y-%m-%d %H:%M:%S"))
+
+        show_button = QtWidgets.QPushButton("查看")
+        show_button.clicked.connect(partial(
+            self.show_data,
+            overview.symbol, overview.exchange, overview.interval,
+            overview.start, overview.end,
+        ))
+
+        output_button = QtWidgets.QPushButton("导出")
+        output_button.clicked.connect(partial(
+            self.output_data,
+            overview.symbol, overview.exchange, overview.interval,
+            overview.start, overview.end,
+        ))
+
+        delete_button = QtWidgets.QPushButton("删除")
+        delete_button.clicked.connect(partial(
+            self.delete_data,
+            overview.symbol, overview.exchange, overview.interval,
+        ))
+
+        self.tree.setItemWidget(item, 7, show_button)
+        self.tree.setItemWidget(item, 8, output_button)
+        self.tree.setItemWidget(item, 9, delete_button)
+
+    self.tree.addTopLevelItems(list(interval_childs.values()))
+    for interval_child in interval_childs.values():
+        interval_child.setExpanded(True)
+
+
 _original_init_ui           = ManagerWidget.init_ui
 _original_download_bar_data = ManagerEngine.download_bar_data
 
 ManagerWidget.init_ui           = _patched_init_ui
+ManagerWidget.refresh_tree      = _patched_refresh_tree
 ManagerWidget.update_data       = _patched_update_data
+ManagerWidget.delete_data       = _patched_delete_data
 ManagerEngine.download_bar_data = _patched_download_bar_data
