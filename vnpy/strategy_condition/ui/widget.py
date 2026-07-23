@@ -8,6 +8,7 @@ from typing import Optional
 
 from vnpy.trader.ui import QtWidgets, QtCore, QtGui
 from vnpy.trader.engine import MainEngine
+from vnpy.trader.constant import Interval
 
 from ..constant import (NodeOp, ConditionCategory, ConditionIndicator,
                          SignalSource)
@@ -441,9 +442,38 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         # K线数量
         v.addWidget(_lbl("每只股票加载K线数", _MUT, 12))
         self._nbars_sp = QtWidgets.QSpinBox()
-        self._nbars_sp.setRange(60, 2000); self._nbars_sp.setValue(300)
+        self._nbars_sp.setRange(0, 10000); self._nbars_sp.setValue(300)
         self._nbars_sp.setSingleStep(50); self._nbars_sp.setStyleSheet(_SPIN_SS)
+        # 显示预估起始日期
+        self._nbars_start_lbl = _lbl("", _MUT, 11)
+        self._nbars_start_lbl.setStyleSheet("color: #888888;")
+        v.addWidget(self._nbars_start_lbl)
         v.addWidget(self._nbars_sp)
+
+        # K线周期
+        v.addWidget(_lbl("K线周期", _MUT, 12))
+        self._interval_cb = QtWidgets.QComboBox()
+        self._interval_cb.setStyleSheet(_COMBO_SS)
+        # 选项文字 -> (Interval, 显示名称)
+        self._interval_options = [
+            (Interval.DAILY,    "日线"),
+            (Interval.MINUTE,   "1分钟"),
+            (Interval.MINUTE_5, "5分钟"),
+            (Interval.MINUTE_15,"15分钟"),
+            (Interval.MINUTE_30,"30分钟"),
+            (Interval.HOUR,     "60分钟"),
+        ]
+        for _, name in self._interval_options:
+            self._interval_cb.addItem(name)
+        # 默认选择日线
+        self._interval_cb.setCurrentIndex(0)
+        v.addWidget(self._interval_cb)
+        
+        # 更新预估起始日期 - 需要放在_interval_cb创建之后
+        def update_estimate_start():
+            self._update_estimated_start_date()
+        self._nbars_sp.valueChanged.connect(update_estimate_start)
+        self._interval_cb.currentIndexChanged.connect(update_estimate_start)
 
         # ── 时间范围 ─────────────────────────────────────────────────
         v.addWidget(_hline())
@@ -664,30 +694,52 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         if batch is not None:
             for s in getattr(batch, "signals", []):
                 if s.symbol == symbol:
-                    # 入场日期 → 买入标记
-                    entry_dt = str(s.dt)[:10]
+                    # 入场日期 → 买入标记，智能格式化：
+                    # - 日线 (hour=0, min=0): 只保留 "YYYY-MM-DD"
+                    # - 分钟线: 保留 "YYYY-MM-DD HH:MM"
+                    dt = s.dt
+                    if hasattr(dt, 'hour') and dt.hour == 0 and dt.minute == 0:
+                        entry_dt = str(dt)[:10]  # YYYY-MM-DD
+                    else:
+                        entry_dt = str(dt)[:16]  # YYYY-MM-DD HH:MM
                     if entry_dt and entry_dt != "None":
                         buy_dates.append(entry_dt)
-                    # 出场日期 → 卖出标记
+                    # 出场日期 → 卖出标记，同样处理
                     exit_dt = getattr(s, "exit_dt", None)
                     if exit_dt is not None:
-                        exit_str = str(exit_dt)[:10]
+                        if hasattr(exit_dt, 'hour') and exit_dt.hour == 0 and exit_dt.minute == 0:
+                            exit_str = str(exit_dt)[:10]
+                        else:
+                            exit_str = str(exit_dt)[:16]
                         if exit_str and exit_str != "None":
                             sell_dates.append(exit_str)
         # 如果批次为空，用当前记录本身
         if not buy_dates and not sell_dates:
-            dt_str = str(getattr(rec, "dt", ""))[:10]
-            if dt_str and dt_str != "None":
-                buy_dates = [dt_str]
+            dt = getattr(rec, "dt", None)
+            if dt:
+                if hasattr(dt, 'hour') and dt.hour == 0 and dt.minute == 0:
+                    dt_str = str(dt)[:10]
+                else:
+                    dt_str = str(dt)[:16]
+                if dt_str and dt_str != "None":
+                    buy_dates = [dt_str]
             exit_dt = getattr(rec, "exit_dt", None)
             if exit_dt is not None:
-                exit_str = str(exit_dt)[:10]
+                if hasattr(exit_dt, 'hour') and exit_dt.hour == 0 and exit_dt.minute == 0:
+                    exit_str = str(exit_dt)[:10]
+                else:
+                    exit_str = str(exit_dt)[:16]
                 if exit_str and exit_str != "None":
                     sell_dates = [exit_str]
         # 切换到 K线图 Tab
         kline_idx = self._tab.indexOf(self._kline_tab)
         if kline_idx >= 0:
             self._tab.setCurrentIndex(kline_idx)
+        
+        # 同步K线图周期选择和当前主界面保持一致
+        current_idx = self._interval_cb.currentIndex()
+        self._kline_tab._interval_cb.setCurrentIndex(current_idx)
+        
         self._kline_tab.show_symbol(symbol, buy_dates=buy_dates, sell_dates=sell_dates)
 
     def _on_strategy_changed(self, idx: int) -> None:
@@ -943,13 +995,17 @@ class StrategyConditionWidget(QtWidgets.QWidget):
 
     def _load_bars(self, symbols: list, n_bars: int) -> dict:
         """
-        Load daily K-line bars for each symbol.
+        Load K-line bars for each symbol.
         Priority: MarketBehavior CandleBuffer > VeighNa database.
         Returns {vt_symbol: [bar, ...]} where each bar has
         .open .high .low .close .volume .dt attributes expected by
         ConditionEngine.
         """
         bars_dict: dict = {}
+
+        # Get selected interval from UI
+        idx = self._interval_cb.currentIndex()
+        interval, _ = self._interval_options[idx]
 
         # 1. Try MarketBehavior CandleBuffer first
         buf = None
@@ -965,15 +1021,32 @@ class StrategyConditionWidget(QtWidgets.QWidget):
                 return bars_dict
 
         # 2. Fall back to VeighNa database
-        try:
-            from vnpy.trader.database import get_database
-            from vnpy.trader.constant import Exchange, Interval
-            from datetime import datetime, timedelta
-            db       = get_database()
-            end_dt   = datetime.now()
-            start_dt = end_dt - timedelta(days=int(n_bars * 1.8))
-        except Exception:
-            return {sym: [] for sym in symbols}
+        from vnpy.trader.database import get_database
+        from vnpy.trader.constant import Exchange, Interval
+        from datetime import datetime, timedelta
+        db = get_database()
+
+        # 使用 UI 上的回测时间范围
+        end_date_str = self._date_end.text().strip()
+        start_date_str = self._date_start.text().strip()
+
+        if end_date_str in ("今日", "today", ""):
+            end_dt = datetime.now()
+        else:
+            try:
+                end_dt = datetime.strptime(end_date_str, "%Y-%m-%d")
+                # 设到当天23:59:59确保包含当天所有数据
+                end_dt = end_dt.replace(hour=23, minute=59, second=59)
+            except ValueError:
+                end_dt = datetime.now()
+
+        if start_date_str:
+            try:
+                start_dt = datetime.strptime(start_date_str, "%Y-%m-%d")
+            except ValueError:
+                start_dt = datetime(1990, 1, 1)
+        else:
+            start_dt = datetime(1990, 1, 1)
 
         for sym in symbols:
             try:
@@ -981,21 +1054,60 @@ class StrategyConditionWidget(QtWidgets.QWidget):
                 code     = parts[0]
                 exch_str = parts[1] if len(parts) > 1 else ""
                 try:
+                    # UI uses SSE/SZSE, database enum uses the same values
                     exchange = Exchange(exch_str)
                 except Exception:
                     exchange = Exchange.SSE if code.startswith("6") else Exchange.SZSE
                 raw = db.load_bar_data(
                     symbol=code, exchange=exchange,
-                    interval=Interval.DAILY,
+                    interval=interval,
                     start=start_dt, end=end_dt,
                 )
                 # BarData uses open_price/high_price/low_price/close_price;
                 # ConditionEngine reads .open/.high/.low/.close/.volume/.dt
-                bars_dict[sym] = [_BarAdapter(b) for b in raw[-n_bars:]] if raw else []
+                if n_bars > 0 and raw:
+                    bars_dict[sym] = [_BarAdapter(b) for b in raw[-n_bars:]]
+                else:
+                    bars_dict[sym] = [_BarAdapter(b) for b in raw] if raw else []
             except Exception:
                 bars_dict[sym] = []
 
         return bars_dict
+
+    def _update_estimated_start_date(self) -> None:
+        """根据当前K线数量和周期计算预估起始日期并显示"""
+        from vnpy.trader.constant import Interval
+        from datetime import datetime, timedelta
+        
+        n_bars = self._nbars_sp.value()
+        if n_bars <= 0:
+            self._nbars_start_lbl.setText("预估起始日期：全部历史数据")
+            return
+        
+        idx = self._interval_cb.currentIndex()
+        interval, _ = self._interval_options[idx]
+        end_dt = datetime.now()
+        
+        if interval == Interval.DAILY:
+            days_needed = int(n_bars * 1.8)
+        elif interval in (Interval.MINUTE, Interval.MINUTE_5,
+                          Interval.MINUTE_15, Interval.MINUTE_30,
+                          Interval.HOUR):
+            bars_per_day = {
+                Interval.MINUTE:    240,
+                Interval.MINUTE_5:   48,
+                Interval.MINUTE_15:  16,
+                Interval.MINUTE_30:   8,
+                Interval.HOUR:        4,
+            }
+            bpd = bars_per_day.get(interval, 240)
+            days_needed = int(n_bars / bpd * 1.8) + 1
+        else:
+            days_needed = int(n_bars * 1.8)
+        
+        start_dt = end_dt - timedelta(days=days_needed)
+        date_str = start_dt.strftime("%Y-%m-%d")
+        self._nbars_start_lbl.setText(f"预估起始日期：{date_str}")
 
     def _show_msg(self, msg: str) -> None:
         QtWidgets.QMessageBox.information(self, "提示", msg)

@@ -80,6 +80,61 @@ def _patched_init_ui(self: ManagerWidget) -> None:
     export_all_btn.clicked.connect(lambda: _export_all(self))
     hbox.addWidget(export_all_btn)
 
+    # 设置右键菜单和双击事件（替代行内按钮，大幅提升性能）
+    self.tree.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+    self.tree.customContextMenuRequested.connect(lambda pos: _on_tree_context_menu(self, pos))
+    self.tree.doubleClicked.connect(lambda idx: _on_tree_double_click(self, idx))
+
+
+def _get_item_data(self: ManagerWidget, item) -> "dict | None":
+    """从TreeWidgetItem 中取出存储的 overview 数据。"""
+    if item is None:
+        return None
+    data = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+    return data if isinstance(data, dict) else None
+
+
+def _on_tree_context_menu(self: ManagerWidget, pos) -> None:
+    """右键菜单：查看 / 导出 / 删除"""
+    item = self.tree.itemAt(pos)
+    data = _get_item_data(self, item)
+    if not data:
+        return
+
+    menu = QtWidgets.QMenu(self)
+    act_show   = menu.addAction("查看")
+    act_export = menu.addAction("导出")
+    menu.addSeparator()
+    act_delete = menu.addAction("删除")
+
+    action = menu.exec_(self.tree.viewport().mapToGlobal(pos))
+    if action == act_show:
+        self.show_data(
+            data["symbol"], data["exchange"], data["interval"],
+            data["start"], data["end"],
+        )
+    elif action == act_export:
+        self.output_data(
+            data["symbol"], data["exchange"], data["interval"],
+            data["start"], data["end"],
+        )
+    elif action == act_delete:
+        self.delete_data(
+            data["symbol"], data["exchange"], data["interval"],
+        )
+
+
+def _on_tree_double_click(self: ManagerWidget, index) -> None:
+    """双击条目：直接查看数据"""
+    item = self.tree.itemFromIndex(index)
+    data = _get_item_data(self, item)
+    if not data:
+        return
+    self.show_data(
+        data["symbol"], data["exchange"], data["interval"],
+        data["start"], data["end"],
+    )
+
 
 def _ensure_db_tz(dt: datetime) -> datetime:
     if dt.tzinfo is None:
@@ -443,17 +498,46 @@ _INTERVAL_DISPLAY_ORDER = [
 ]
 
 
-def _patched_refresh_tree(self: ManagerWidget) -> None:
-    from functools import partial
-    from vnpy_datamanager.engine import BarOverview
+class _RefreshWorker(QtCore.QThread):
+    """后台线程：获取 bar overview 数据，避免阻塞 UI。"""
+    sig_done = QtCore.Signal(list)
 
+    def __init__(self, engine: ManagerEngine) -> None:
+        super().__init__()
+        self._engine = engine
+
+    def run(self) -> None:
+        overviews = self._engine.get_bar_overview()
+        overviews.sort(key=lambda x: x.symbol)
+        self.sig_done.emit(overviews)
+
+
+def _patched_refresh_tree(self: ManagerWidget) -> None:
+    """异步刷新树形列表：后台获取数据，前台快速构建树（无行内按钮）。"""
+
+    # 如果已有刷新线程在跑，忽略重复请求
+    if hasattr(self, '_refresh_worker') and self._refresh_worker is not None:
+        if self._refresh_worker.isRunning():
+            return
+
+    def _on_data_ready(overviews: list) -> None:
+        _build_tree(self, overviews)
+        self._refresh_worker = None
+
+    worker = _RefreshWorker(self.engine)
+    worker.sig_done.connect(_on_data_ready)
+    self._refresh_worker = worker
+    worker.start()
+
+
+def _build_tree(self: ManagerWidget, overviews: list) -> None:
+    """根据 overviews 数据构建树，不创建行内按钮，速度极快。"""
+
+    self.tree.setUpdatesEnabled(False)
     self.tree.clear()
 
     interval_childs: dict[Interval, QtWidgets.QTreeWidgetItem] = {}
     exchange_childs: dict[tuple, QtWidgets.QTreeWidgetItem] = {}
-
-    overviews: list[BarOverview] = self.engine.get_bar_overview()
-    overviews.sort(key=lambda x: x.symbol)
 
     # 收集本次数据中实际出现的 interval，按显示顺序建节点
     present_intervals = {ov.interval for ov in overviews}
@@ -466,7 +550,6 @@ def _patched_refresh_tree(self: ManagerWidget) -> None:
 
     for overview in overviews:
         if overview.interval not in interval_childs:
-            # 兜底：处理不在预定义列表里的 interval
             interval_child = QtWidgets.QTreeWidgetItem()
             interval_child.setText(0, overview.interval.value)
             interval_childs[overview.interval] = interval_child
@@ -487,33 +570,20 @@ def _patched_refresh_tree(self: ManagerWidget) -> None:
         item.setText(5, overview.start.strftime("%Y-%m-%d %H:%M:%S"))
         item.setText(6, overview.end.strftime("%Y-%m-%d %H:%M:%S"))
 
-        show_button = QtWidgets.QPushButton("查看")
-        show_button.clicked.connect(partial(
-            self.show_data,
-            overview.symbol, overview.exchange, overview.interval,
-            overview.start, overview.end,
-        ))
-
-        output_button = QtWidgets.QPushButton("导出")
-        output_button.clicked.connect(partial(
-            self.output_data,
-            overview.symbol, overview.exchange, overview.interval,
-            overview.start, overview.end,
-        ))
-
-        delete_button = QtWidgets.QPushButton("删除")
-        delete_button.clicked.connect(partial(
-            self.delete_data,
-            overview.symbol, overview.exchange, overview.interval,
-        ))
-
-        self.tree.setItemWidget(item, 7, show_button)
-        self.tree.setItemWidget(item, 8, output_button)
-        self.tree.setItemWidget(item, 9, delete_button)
+        # 将overview 信息存到 item 的 UserRole 供右键菜单使用
+        item.setData(0, QtCore.Qt.ItemDataRole.UserRole, {
+            "symbol": overview.symbol,
+            "exchange": overview.exchange,
+            "interval": overview.interval,
+            "start": overview.start,
+            "end": overview.end,
+        })
 
     self.tree.addTopLevelItems(list(interval_childs.values()))
     for interval_child in interval_childs.values():
         interval_child.setExpanded(True)
+
+    self.tree.setUpdatesEnabled(True)
 
 
 _original_init_ui           = ManagerWidget.init_ui

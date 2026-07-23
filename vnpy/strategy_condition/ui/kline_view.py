@@ -8,6 +8,7 @@ import pyqtgraph as pg
 from pyqtgraph import GraphicsObject
 
 from vnpy.trader.ui import QtWidgets, QtCore, QtGui
+from vnpy.trader.constant import Interval
 
 if TYPE_CHECKING:
     from vnpy.trader.object import BarData
@@ -39,6 +40,9 @@ def _lbl(text, color=_FG, size=14, bold=False):
 
 # ── 自定义图元 ───────────────────────────────────────────────────────
 
+# Neutral gray for flat price (close == open) - between red and green
+_C_FLAT = "#9399b2"
+
 class CandlestickItem(GraphicsObject):
     def __init__(self, bars: list):
         super().__init__()
@@ -50,7 +54,18 @@ class CandlestickItem(GraphicsObject):
         p = QtGui.QPainter(self._pic)
         w = 0.35
         for i, (o, h, l, c) in enumerate(self._bars):
-            color = QtGui.QColor(_C_UP if c >= o else _C_DN)
+            # 开高低收完全相等 → 蓝色横线（停牌/无波动）
+            if o == h == l == c:
+                color = QtGui.QColor(_BLU)
+                p.setPen(pg.mkPen(color, width=2))
+                p.drawLine(QtCore.QPointF(i - w, c), QtCore.QPointF(i + w, c))
+                continue
+            if c > o:
+                color = QtGui.QColor(_C_UP)    # 阳线（涨）
+            elif c < o:
+                color = QtGui.QColor(_C_DN)    # 阴线（跌）
+            else:
+                color = QtGui.QColor(_C_FLAT)  # 平盘/十字星（有上下影线）
             p.setPen(pg.mkPen(color, width=1))
             p.setBrush(pg.mkBrush(color))
             p.drawLine(QtCore.QPointF(i, l), QtCore.QPointF(i, h))
@@ -74,8 +89,21 @@ class VolumeItem(GraphicsObject):
         p = QtGui.QPainter(self._pic)
         w = 0.35
         for i, vol in enumerate(self._vols):
-            up    = (i == 0) or (self._closes[i] >= self._closes[i - 1])
-            color = QtGui.QColor(_C_UP if up else _C_DN)
+            if i == 0:
+                up = True
+            else:
+                if self._closes[i] > self._closes[i - 1]:
+                    up = True
+                elif self._closes[i] < self._closes[i - 1]:
+                    up = False
+                else:
+                    up = None  # flat
+            if up is True:
+                color = QtGui.QColor(_C_UP)
+            elif up is False:
+                color = QtGui.QColor(_C_DN)
+            else:
+                color = QtGui.QColor(_C_FLAT)
             p.setPen(pg.mkPen(color, width=1))
             p.setBrush(pg.mkBrush(color))
             p.drawRect(QtCore.QRectF(i - w, 0, w * 2, vol))
@@ -128,23 +156,33 @@ class KlineChartWidget(QtWidgets.QWidget):
             f"padding:2px 10px;border-bottom:1px solid {_BORD};")
         layout.addWidget(self._info_bar)
 
-        self._glw = pg.GraphicsLayoutWidget()
-        self._glw.setBackground(_BG)
-        layout.addWidget(self._glw, 1)
+        # 使用 QSplitter 使 K线区和成交量区高度可拖拽调整
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        splitter.setHandleWidth(5)
+        splitter.setStyleSheet(
+            "QSplitter::handle { background: #45475a; }"
+            "QSplitter::handle:hover { background: #89b4fa; }")
 
-        self._main_plot = self._glw.addPlot(row=0, col=0)
+        self._glw_main = pg.GraphicsLayoutWidget()
+        self._glw_main.setBackground(_BG)
+        self._main_plot = self._glw_main.addPlot(row=0, col=0)
         self._main_plot.showGrid(x=True, y=True, alpha=0.15)
         self._main_plot.getAxis("left").setTextPen(_MUT)
         self._main_plot.getAxis("bottom").setTextPen(_MUT)
 
-        self._vol_plot = self._glw.addPlot(row=1, col=0)
+        self._glw_vol = pg.GraphicsLayoutWidget()
+        self._glw_vol.setBackground(_BG)
+        self._vol_plot = self._glw_vol.addPlot(row=0, col=0)
         self._vol_plot.showGrid(x=True, y=True, alpha=0.10)
         self._vol_plot.getAxis("left").setTextPen(_MUT)
         self._vol_plot.getAxis("bottom").setTextPen(_MUT)
         self._vol_plot.setXLink(self._main_plot)
 
-        self._glw.ci.layout.setRowStretchFactor(0, 7)
-        self._glw.ci.layout.setRowStretchFactor(1, 3)
+        splitter.addWidget(self._glw_main)
+        splitter.addWidget(self._glw_vol)
+        splitter.setStretchFactor(0, 7)
+        splitter.setStretchFactor(1, 3)
+        layout.addWidget(splitter, 1)
 
         self._vline = pg.InfiniteLine(angle=90, pen=pg.mkPen(_MUT, width=1,
                        style=QtCore.Qt.PenStyle.DashLine))
@@ -173,6 +211,7 @@ class KlineChartWidget(QtWidgets.QWidget):
         self._bars     = [(b.open_price, b.high_price, b.low_price, b.close_price)
                           for b in bars]
         self._dates    = [b.datetime.strftime("%Y-%m-%d") for b in bars]
+        self._datetimes = [b.datetime for b in bars]
         self._volumes  = [float(b.volume) for b in bars]
         self._buy_triggers  = set(buy_indices or [])
         self._sell_triggers = set(sell_indices or [])
@@ -201,6 +240,22 @@ class KlineChartWidget(QtWidgets.QWidget):
         ax_v = DateAxis(self._dates, orientation="bottom")
         ax_v.setTextPen(_MUT)
         self._vol_plot.setAxisItems({"bottom": ax_v})
+
+        # 日期分隔线（分钟线时，不同日期之间画竖线）
+        if len(self._dates) > 1:
+            has_same_date = any(self._dates[i] == self._dates[i+1]
+                                for i in range(min(10, len(self._dates)-1)))
+            if has_same_date:  # 说明是分钟线
+                prev_date = self._dates[0]
+                for i in range(1, n):
+                    cur_date = self._dates[i]
+                    if cur_date != prev_date:
+                        vline = pg.InfiniteLine(
+                            pos=i - 0.5, angle=90,
+                            pen=pg.mkPen("#f9e2af", width=1,
+                                         style=QtCore.Qt.PenStyle.DashLine))
+                        self._main_plot.addItem(vline)
+                    prev_date = cur_date
 
         # K线（可隐藏）
         if self._show_candles:
@@ -321,11 +376,20 @@ class KlineChartWidget(QtWidgets.QWidget):
             return
         o, h, l, c = self._bars[x]
         vol  = self._volumes[x] if x < len(self._volumes) else 0
-        date = self._dates[x]   if x < len(self._dates)   else ""
+        dt = self._datetimes[x] if x < len(self._datetimes) else None
         chg  = ((c - self._bars[x-1][3]) / self._bars[x-1][3] * 100
                 if x > 0 else 0.0)
         cs   = f"+{chg:.2f}%" if chg >= 0 else f"{chg:.2f}%"
         cc   = _C_UP if chg >= 0 else _C_DN
+
+        # 格式化日期时间：日线只显示日期，分钟线显示日期+时间
+        if dt is not None:
+            if dt.hour == 0 and dt.minute == 0:
+                datetime_str = dt.strftime("%Y-%m-%d")
+            else:
+                datetime_str = dt.strftime("%Y-%m-%d %H:%M")
+        else:
+            datetime_str = ""
 
         # 信号标记
         mark = ""
@@ -337,7 +401,7 @@ class KlineChartWidget(QtWidgets.QWidget):
             mark = f"  <b style='color:{_RED}'>▼ 卖出信号</b>"
 
         self._info_bar.setText(
-            f"  {date}　"
+            f"  {datetime_str}　"
             f"开 <b style='color:{_FG}'>{o:.2f}</b>　"
             f"高 <b style='color:{_C_UP}'>{h:.2f}</b>　"
             f"低 <b style='color:{_C_DN}'>{l:.2f}</b>　"
@@ -404,15 +468,63 @@ class KlineViewTab(QtWidgets.QWidget):
         sep.setStyleSheet(f"color:{_BORD};")
         tl.addWidget(sep)
 
+        # K线周期选择
+        tl.addWidget(_lbl('周期:', _MUT))
+        self._interval_cb = QtWidgets.QComboBox()
+        self._interval_cb.setFixedWidth(70)
+        self._interval_cb.setStyleSheet('''
+            QComboBox {
+                background:#11111b;
+                color:#cdd6f4;
+                border:1px solid #45475a;
+                border-radius:3px;
+                padding:2px 4px;
+                font-size:12px;
+                min-height:22px;
+            }
+            QComboBox::drop-down {
+                border:none;
+            }
+            QComboBox::down-arrow {
+                width:8px;
+                height:8px;
+            }
+        ''')
+        self._interval_options = [
+            (Interval.DAILY,    "日线"),
+            (Interval.MINUTE,   "1分钟"),
+            (Interval.MINUTE_5, "5分钟"),
+            (Interval.MINUTE_15,"15分钟"),
+            (Interval.MINUTE_30,"30分钟"),
+            (Interval.HOUR,     "60分钟"),
+        ]
+        for _, name in self._interval_options:
+            self._interval_cb.addItem(name)
+        self._interval_cb.setCurrentIndex(0)
+        tl.addWidget(self._interval_cb)
+
+        sep = QtWidgets.QFrame()
+        sep.setFrameShape(QtWidgets.QFrame.Shape.VLine)
+        sep.setStyleSheet(f"color:{_BORD};")
+        tl.addWidget(sep)
+
         tl.addWidget(_lbl('MA:', _MUT))
         _edit_style = ('background:#11111b;color:#cdd6f4;border:1px solid #45475a;'
                        'border-radius:3px;padding:1px 4px;font-size:13px;')
         _chk_style  = 'font-size:14px;background:transparent;'
         self._ma_inputs  = []
         self._ma_enabled = []
-        for default, color in [('5', '#f9e2af'), ('20', '#89b4fa'), ('60', '#cba6f7')]:
+        _MA_DEFAULTS = [
+            ('5',   '#f9e2af'),  # 黄色
+            ('10',  '#94e2d5'),  # 青色
+            ('20',  '#89b4fa'),  # 蓝色
+            ('60',  '#cba6f7'),  # 紫色
+            ('120', '#f5c2e7'),  # 粉色
+            ('250', '#a6e3a1'),  # 绿色
+        ]
+        for default, color in _MA_DEFAULTS:
             chk = QtWidgets.QCheckBox()
-            chk.setChecked(True)
+            chk.setChecked(default in ('5', '20', '60'))
             chk.setStyleSheet(f'color:{color};{_chk_style}')
             chk.stateChanged.connect(self._on_ma_toggle)
             edt = QtWidgets.QLineEdit(default)
@@ -527,19 +639,58 @@ class KlineViewTab(QtWidgets.QWidget):
             return
 
         # 日期→索引映射
-        date_to_idx = {b.datetime.strftime('%Y-%m-%d'): i for i, b in enumerate(bars)}
+        # 对于日线，key = 'YYYY-MM-DD'；对于分钟线，key = 'YYYY-MM-DD HH:MM'
+        date_to_idx = {}
+        date_to_idx_10 = {}  # 仅保存前10字符也做一份索引用于兼容
+        for i, b in enumerate(bars):
+            dt = b.datetime
+            if dt.hour == 0 and dt.minute == 0:
+                key = dt.strftime('%Y-%m-%d')
+                date_to_idx[key] = i
+            else:
+                key = dt.strftime('%Y-%m-%d %H:%M')
+                date_to_idx[key] = i
+                # 同时保存YYYY-MM-DD用于兼容旧格式
+                key_10 = dt.strftime('%Y-%m-%d')
+                date_to_idx_10[key_10] = i
 
-        # 解析买入/卖出日期
-        buy_dates  = buy_dates or []
-        sell_dates = sell_dates or []
+        # 解析买入/卖出日期，标准化日期格式
+        def normalize_date(d: str) -> str:
+            """标准化日期字符串：去除空白，截取到对应长度"""
+            d = d.strip()
+            if len(d) >= 16 and ':' in d:
+                # 已经是YYYY-MM-DD HH:MM格式，保持原样
+                return d[:16]
+            elif len(d) >= 10:
+                # 只有YYYY-MM-DD
+                return d[:10]
+            return d
+
+        buy_dates  = [normalize_date(d) for d in (buy_dates or [])]
+        sell_dates = [normalize_date(d) for d in (sell_dates or [])]
 
         # 兼容旧接口：如果 buy_dates/sell_dates 都为空但 trigger_dates 有值，
         # 则全部当作买入信号
         if not buy_dates and not sell_dates and trigger_dates:
-            buy_dates = trigger_dates
+            buy_dates = [normalize_date(d) for d in trigger_dates]
 
-        buy_indices  = sorted({date_to_idx[d] for d in buy_dates if d in date_to_idx})
-        sell_indices = sorted({date_to_idx[d] for d in sell_dates if d in date_to_idx})
+        # 尝试匹配，如果精确匹配失败则回退到10字符匹配
+        buy_indices_set = set()
+        for d in buy_dates:
+            if d in date_to_idx:
+                buy_indices_set.add(date_to_idx[d])
+            elif d in date_to_idx_10:
+                buy_indices_set.add(date_to_idx_10[d])
+                
+        sell_indices_set = set()
+        for d in sell_dates:
+            if d in date_to_idx:
+                sell_indices_set.add(date_to_idx[d])
+            elif d in date_to_idx_10:
+                sell_indices_set.add(date_to_idx_10[d])
+        
+        buy_indices  = sorted(buy_indices_set)
+        sell_indices = sorted(sell_indices_set)
 
         self._current_buy_triggers  = buy_indices
         self._current_sell_triggers = sell_indices
@@ -579,15 +730,16 @@ class KlineViewTab(QtWidgets.QWidget):
             self.show_symbol(sym)
 
     def _get_ma_config(self) -> list:
-        colors = ['#f9e2af', '#89b4fa', '#cba6f7']
+        colors = ['#f9e2af', '#94e2d5', '#89b4fa', '#cba6f7', '#f5c2e7', '#a6e3a1']
         result = []
         for i, edt in enumerate(self._ma_inputs):
             try:
                 period = int(edt.text().strip())
             except ValueError:
                 period = 0
+            color = colors[i] if i < len(colors) else '#cdd6f4'
             enabled = self._ma_enabled[i].isChecked() and period > 0
-            result.append((period, colors[i], enabled))
+            result.append((period, color, enabled))
         return result
 
     def _on_ma_toggle(self, *_) -> None:
@@ -612,6 +764,7 @@ class KlineViewTab(QtWidgets.QWidget):
             show_triggers=self._trig_chk.isChecked(),
             show_candles=self._candle_chk.isChecked(),
             title=self._current_symbol,
+            datetimes=getattr(self._chart, '_datetimes', None),
             parent=self,
         )
         win.showMaximized()
@@ -625,6 +778,10 @@ class KlineViewTab(QtWidgets.QWidget):
             import datetime
             from vnpy.trader.database import get_database
             from vnpy.trader.constant import Exchange, Interval
+
+            # Get selected interval from UI
+            idx = self._interval_cb.currentIndex()
+            interval, _ = self._interval_options[idx]
 
             if "." in symbol:
                 sym_code, suffix = symbol.rsplit(".", 1)
@@ -652,7 +809,7 @@ class KlineViewTab(QtWidgets.QWidget):
             bars = db.load_bar_data(
                 symbol=sym_code,
                 exchange=exch,
-                interval=Interval.DAILY,
+                interval=interval,
                 start=datetime.datetime(2000, 1, 1),
                 end=datetime.datetime(2099, 12, 31),
             )
@@ -673,7 +830,8 @@ class _KlineFullscreenWindow(QtWidgets.QWidget):
                  buy_triggers: set, sell_triggers: set,
                  ma_flags: list, show_triggers: bool,
                  show_candles: bool = True,
-                 title: str = "", parent=None):
+                 title: str = "", datetimes: list = None,
+                 parent=None):
         super().__init__(parent, QtCore.Qt.WindowType.Window)
         self.setWindowTitle(f"K线图 全屏 — {title}")
         self.setStyleSheet(f"background:{_BG};")
@@ -690,9 +848,61 @@ class _KlineFullscreenWindow(QtWidgets.QWidget):
             f"background:{_PANEL};border-bottom:1px solid {_BORD};")
         tl = QtWidgets.QHBoxLayout(top_bar)
         tl.setContentsMargins(14, 0, 14, 0)
-        tl.setSpacing(12)
+        tl.setSpacing(8)
         tl.addWidget(_lbl(f"📈 {title}", _GRN, 15, True))
         tl.addWidget(_lbl(f"{len(bars)} bars", _MUT, 13))
+
+        sep = QtWidgets.QFrame()
+        sep.setFrameShape(QtWidgets.QFrame.Shape.VLine)
+        sep.setStyleSheet(f"color:{_BORD};")
+        tl.addWidget(sep)
+
+        # MA 均线设置（6根）
+        tl.addWidget(_lbl('MA:', _MUT, 13))
+        _edit_style = ('background:#11111b;color:#cdd6f4;border:1px solid #45475a;'
+                       'border-radius:3px;padding:1px 4px;font-size:12px;')
+        _chk_style = 'font-size:13px;background:transparent;'
+        _MA_DEFAULTS = [
+            ('5',   '#f9e2af'),
+            ('10',  '#94e2d5'),
+            ('20',  '#89b4fa'),
+            ('60',  '#cba6f7'),
+            ('120', '#f5c2e7'),
+            ('250', '#a6e3a1'),
+        ]
+        self._ma_inputs = []
+        self._ma_enabled = []
+        for idx_ma, (default, color) in enumerate(_MA_DEFAULTS):
+            # 默认启用的和传入 ma_flags 对应
+            initially_on = ma_flags[idx_ma][2] if idx_ma < len(ma_flags) else False
+            init_period = str(ma_flags[idx_ma][0]) if idx_ma < len(ma_flags) else default
+            chk = QtWidgets.QCheckBox()
+            chk.setChecked(initially_on)
+            chk.setStyleSheet(f'color:{color};{_chk_style}')
+            edt = QtWidgets.QLineEdit(init_period)
+            edt.setFixedWidth(34)
+            edt.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            edt.setStyleSheet(f'color:{color};{_edit_style}')
+            tl.addWidget(chk)
+            tl.addWidget(edt)
+            self._ma_inputs.append(edt)
+            self._ma_enabled.append(chk)
+
+        sep2 = QtWidgets.QFrame()
+        sep2.setFrameShape(QtWidgets.QFrame.Shape.VLine)
+        sep2.setStyleSheet(f"color:{_BORD};")
+        tl.addWidget(sep2)
+
+        self._candle_chk = QtWidgets.QCheckBox('K线')
+        self._candle_chk.setChecked(show_candles)
+        self._candle_chk.setStyleSheet(f'color:{_C_UP};font-size:13px;background:transparent;')
+        tl.addWidget(self._candle_chk)
+
+        self._trig_chk = QtWidgets.QCheckBox('信号')
+        self._trig_chk.setChecked(show_triggers)
+        self._trig_chk.setStyleSheet('color:#c084fc;font-size:13px;background:transparent;')
+        tl.addWidget(self._trig_chk)
+
         tl.addStretch()
         tl.addWidget(_lbl("按 Esc 退出全屏", _MUT, 12))
 
@@ -708,8 +918,33 @@ class _KlineFullscreenWindow(QtWidgets.QWidget):
         # 图表（复用已有渲染逻辑）
         self._chart = _FullscreenChart(
             bars, dates, volumes, buy_triggers, sell_triggers,
-            ma_flags, show_triggers, show_candles)
+            ma_flags, show_triggers, show_candles,
+            datetimes=datetimes)
         layout.addWidget(self._chart, 1)
+
+        # 连接 MA 控件信号
+        for chk in self._ma_enabled:
+            chk.stateChanged.connect(self._on_ma_toggle)
+        for edt in self._ma_inputs:
+            edt.editingFinished.connect(self._on_ma_toggle)
+        self._candle_chk.stateChanged.connect(self._on_ma_toggle)
+        self._trig_chk.stateChanged.connect(self._on_ma_toggle)
+
+    def _on_ma_toggle(self, *_) -> None:
+        colors = ['#f9e2af', '#94e2d5', '#89b4fa', '#cba6f7', '#f5c2e7', '#a6e3a1']
+        ma_flags = []
+        for i, edt in enumerate(self._ma_inputs):
+            try:
+                period = int(edt.text().strip())
+            except ValueError:
+                period = 0
+            color = colors[i] if i < len(colors) else '#cdd6f4'
+            enabled = self._ma_enabled[i].isChecked() and period > 0
+            ma_flags.append((period, color, enabled))
+        self._chart._ma_flags = ma_flags
+        self._chart._show_candles = self._candle_chk.isChecked()
+        self._chart._show_triggers = self._trig_chk.isChecked()
+        self._chart._redraw()
 
     def keyPressEvent(self, event) -> None:
         if event.key() == QtCore.Qt.Key.Key_Escape:
@@ -724,11 +959,13 @@ class _FullscreenChart(QtWidgets.QWidget):
     def __init__(self, bars: list, dates: list, volumes: list,
                  buy_triggers: set, sell_triggers: set,
                  ma_flags: list, show_triggers: bool,
-                 show_candles: bool = True, parent=None):
+                 show_candles: bool = True,
+                 datetimes: list = None, parent=None):
         super().__init__(parent)
         self._bars = bars
         self._dates = dates
         self._volumes = volumes
+        self._datetimes = datetimes or []
         self._buy_triggers = buy_triggers
         self._sell_triggers = sell_triggers
         self._ma_flags = ma_flags
@@ -750,23 +987,33 @@ class _FullscreenChart(QtWidgets.QWidget):
             f"padding:2px 10px;border-bottom:1px solid {_BORD};")
         layout.addWidget(self._info_bar)
 
-        self._glw = pg.GraphicsLayoutWidget()
-        self._glw.setBackground(_BG)
-        layout.addWidget(self._glw, 1)
+        # 使用 QSplitter 使 K线区和成交量区高度可拖拽调整
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        splitter.setHandleWidth(5)
+        splitter.setStyleSheet(
+            "QSplitter::handle { background: #45475a; }"
+            "QSplitter::handle:hover { background: #89b4fa; }")
 
-        self._main_plot = self._glw.addPlot(row=0, col=0)
+        self._glw_main = pg.GraphicsLayoutWidget()
+        self._glw_main.setBackground(_BG)
+        self._main_plot = self._glw_main.addPlot(row=0, col=0)
         self._main_plot.showGrid(x=True, y=True, alpha=0.15)
         self._main_plot.getAxis("left").setTextPen(_MUT)
         self._main_plot.getAxis("bottom").setTextPen(_MUT)
 
-        self._vol_plot = self._glw.addPlot(row=1, col=0)
+        self._glw_vol = pg.GraphicsLayoutWidget()
+        self._glw_vol.setBackground(_BG)
+        self._vol_plot = self._glw_vol.addPlot(row=0, col=0)
         self._vol_plot.showGrid(x=True, y=True, alpha=0.10)
         self._vol_plot.getAxis("left").setTextPen(_MUT)
         self._vol_plot.getAxis("bottom").setTextPen(_MUT)
         self._vol_plot.setXLink(self._main_plot)
 
-        self._glw.ci.layout.setRowStretchFactor(0, 7)
-        self._glw.ci.layout.setRowStretchFactor(1, 3)
+        splitter.addWidget(self._glw_main)
+        splitter.addWidget(self._glw_vol)
+        splitter.setStretchFactor(0, 7)
+        splitter.setStretchFactor(1, 3)
+        layout.addWidget(splitter, 1)
 
         self._vline = pg.InfiniteLine(angle=90, pen=pg.mkPen(_MUT, width=1,
                        style=QtCore.Qt.PenStyle.DashLine))
@@ -795,6 +1042,22 @@ class _FullscreenChart(QtWidgets.QWidget):
         ax_v = DateAxis(self._dates, orientation="bottom")
         ax_v.setTextPen(_MUT)
         self._vol_plot.setAxisItems({"bottom": ax_v})
+
+        # 日期分隔线（分钟线时，不同日期之间画竖线）
+        if len(self._dates) > 1:
+            has_same_date = any(self._dates[i] == self._dates[i+1]
+                                for i in range(min(10, len(self._dates)-1)))
+            if has_same_date:
+                prev_date = self._dates[0]
+                for i in range(1, n):
+                    cur_date = self._dates[i]
+                    if cur_date != prev_date:
+                        vline = pg.InfiniteLine(
+                            pos=i - 0.5, angle=90,
+                            pen=pg.mkPen("#f9e2af", width=1,
+                                         style=QtCore.Qt.PenStyle.DashLine))
+                        self._main_plot.addItem(vline)
+                    prev_date = cur_date
 
         if self._show_candles:
             candles = CandlestickItem(self._bars)
@@ -865,11 +1128,20 @@ class _FullscreenChart(QtWidgets.QWidget):
             return
         o, h, l, c = self._bars[x]
         vol = self._volumes[x] if x < len(self._volumes) else 0
-        date = self._dates[x] if x < len(self._dates) else ""
         chg = ((c - self._bars[x-1][3]) / self._bars[x-1][3] * 100
                if x > 0 else 0.0)
         cs = f"+{chg:.2f}%" if chg >= 0 else f"{chg:.2f}%"
         cc = _C_UP if chg >= 0 else _C_DN
+
+        # 显示日期+时间（分钟线显示HH:MM）
+        if x < len(self._datetimes) and self._datetimes:
+            dt = self._datetimes[x]
+            if dt.hour == 0 and dt.minute == 0:
+                datetime_str = dt.strftime("%Y-%m-%d")
+            else:
+                datetime_str = dt.strftime("%Y-%m-%d %H:%M")
+        else:
+            datetime_str = self._dates[x] if x < len(self._dates) else ""
 
         mark = ""
         if x in self._buy_triggers and x in self._sell_triggers:
@@ -880,7 +1152,7 @@ class _FullscreenChart(QtWidgets.QWidget):
             mark = f"  <b style='color:{_RED}'>▼ 卖出信号</b>"
 
         self._info_bar.setText(
-            f"  {date}　"
+            f"  {datetime_str}　"
             f"开 <b style='color:{_FG}'>{o:.2f}</b>　"
             f"高 <b style='color:{_C_UP}'>{h:.2f}</b>　"
             f"低 <b style='color:{_C_DN}'>{l:.2f}</b>　"

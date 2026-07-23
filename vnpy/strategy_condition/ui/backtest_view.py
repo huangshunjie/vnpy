@@ -70,12 +70,23 @@ class TradeTableModel(QtCore.QAbstractTableModel):
         rec = self._records[index.row()]
         col = index.column()
 
+        def format_datetime(dt):
+            """智能格式化：日线只显示日期，分钟线显示日期+时间"""
+            s = str(dt)
+            if " 00:00:00" in s:
+                return s[:10]
+            else:
+                # 去掉末尾的 seconds 部分，只保留 YYYY-MM-DD HH:MM
+                return s[:16]
+
         if role == QtCore.Qt.ItemDataRole.DisplayRole:
             pnl = f"{rec.pnl_pct*100:.2f}%" if rec.pnl_pct is not None else "—"
+            buy_date_str = format_datetime(rec.dt) if rec.dt else "—"
+            exit_date_str = format_datetime(rec.exit_dt) if rec.exit_dt else "—"
             vals = [
                 rec.symbol,
-                str(rec.dt)[:10],
-                str(rec.exit_dt)[:10] if rec.exit_dt else "—",
+                buy_date_str,
+                exit_date_str,
                 str(rec.hold_days),
                 f"{rec.price:.2f}",
                 f"{rec.exit_price:.2f}" if rec.exit_price else "—",

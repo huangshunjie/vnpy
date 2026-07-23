@@ -3,8 +3,6 @@ strategy_condition/ui/signal_view.py
 
 三段式信号结果视图：
   第一部分：选股结果表（含导出CSV）
-  第二部分：回测摘要卡片
-  第三部分：触发明细表（可排序）
 """
 from __future__ import annotations
 from typing import Dict, List, Optional
@@ -50,79 +48,59 @@ def _hline() -> QtWidgets.QFrame:
     return f
 
 
-def _reason_cn(r: str) -> str:
-    return {"trailing_stop": "追踪止盈", "take_profit": "固定止盈",
-            "stop_loss": "止损", "max_hold": "持仓到期",
-            "sell_tree": "卖出条件", "ma_break_down": "跌破均线",
-            "macd_death_sell": "MACD死叉"}.get(r, r)
-
-
-def _hit_rate_map(signals: List[SignalRecord]) -> Dict[str, str]:
-    from collections import defaultdict
-    wins: Dict[str, int] = defaultdict(int)
-    total: Dict[str, int] = defaultdict(int)
-    for s in signals:
-        if s.pnl_pct is not None:
-            total[s.symbol] += 1
-            if s.pnl_pct > 0:
-                wins[s.symbol] += 1
-    return {sym: f"{wins.get(sym,0)}/{n}  ({wins.get(sym,0)/n*100:.0f}%)"
-            for sym, n in total.items()}
-
-
-# ── 统计卡片 ─────────────────────────────────────────────────────────
-
 class _StatCard(QtWidgets.QWidget):
-    def __init__(self, title: str, color: str, parent=None):
-        super().__init__(parent)
+    """单个统计卡片"""
+    def __init__(self, title: str, color: str = _FG):
+        super().__init__()
         self.setStyleSheet(
-            f"background:{_PANEL};border:1px solid {color};"
-            "border-radius:6px;min-height:68px;")
+            f"background:{_PANEL};border:1px solid {_BORD};border-radius:6px;")
         v = QtWidgets.QVBoxLayout(self)
-        v.setContentsMargins(10, 6, 10, 6)
+        v.setContentsMargins(12, 8, 12, 8)
         v.setSpacing(2)
-        v.addWidget(_lbl(title, color, 12, True))
-        self._val = QtWidgets.QLabel("—")
-        self._val.setStyleSheet(
-            f"color:{color};font-size:20px;font-weight:bold;"
-            "background:transparent;border:none;")
-        self._val.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        v.addWidget(_lbl(title, _MUT, 11))
+        self._val = _lbl("—", color, 18, True)
         v.addWidget(self._val)
 
-    def set(self, text: str) -> None:
+    def set_value(self, text: str, color: Optional[str] = None) -> None:
         self._val.setText(text)
+        if color:
+            self._val.setStyleSheet(
+                f"color:{color};font-size:18px;font-weight:bold;"
+                f"background:transparent;border:none;")
 
 
-# ── 可点击列头排序的 QTableWidget ─────────────────────────────────────
+class _NumericItem(QtWidgets.QTableWidgetItem):
+    """自定义 QTableWidgetItem，重写 __lt__ 使排序按 UserRole 数值进行"""
+    def __lt__(self, other: QtWidgets.QTableWidgetItem) -> bool:
+        left_data = self.data(QtCore.Qt.ItemDataRole.UserRole)
+        right_data = other.data(QtCore.Qt.ItemDataRole.UserRole)
+
+        # 如果两个都有数值，按数值比较
+        if left_data is not None and right_data is not None:
+            return float(left_data) < float(right_data)
+
+        # 否则默认文本比较
+        return super().__lt__(other)
+
 
 class _SortableTable(QtWidgets.QTableWidget):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.setSortingEnabled(False)
-        self.horizontalHeader().sectionClicked.connect(self._on_hdr)
-        self._sort_col = -1
-        self._sort_asc = True
-
-    def _on_hdr(self, col: int) -> None:
-        if self._sort_col == col:
-            self._sort_asc = not self._sort_asc
-        else:
-            self._sort_col = col
-            self._sort_asc = False
-        self.sortItems(col,
-            QtCore.Qt.SortOrder.AscendingOrder if self._sort_asc
-            else QtCore.Qt.SortOrder.DescendingOrder)
+    """可点击排序的表格，按UserRole中的数值排序"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setSortingEnabled(True)
 
     def add_row(self, cells) -> None:
         """cells: [(text, color, sort_key_or_None), ...]"""
         row = self.rowCount()
         self.insertRow(row)
         for col, (text, color, sort_key) in enumerate(cells):
-            item = QtWidgets.QTableWidgetItem(text)
+            item = _NumericItem()
+            item.setText(text)
+            if sort_key is not None:
+                item.setData(QtCore.Qt.ItemDataRole.UserRole, float(sort_key))
+                item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
             item.setForeground(QtGui.QColor(color))
             item.setFlags(item.flags() & ~QtCore.Qt.ItemFlag.ItemIsEditable)
-            if sort_key is not None:
-                item.setData(QtCore.Qt.ItemDataRole.UserRole, sort_key)
             self.setItem(row, col, item)
 
 
@@ -132,7 +110,7 @@ class _SortableTable(QtWidgets.QTableWidget):
 
 class SignalView(QtWidgets.QWidget):
     """
-    三段式信号结果视图。
+    信号结果视图：只保留选股结果
     load_batch / load_signals / clear 接口与旧版保持兼容。
     """
     signal_selected = QtCore.Signal(object)
@@ -160,7 +138,7 @@ class SignalView(QtWidgets.QWidget):
             "QSplitter::handle:hover{background:#89b4fa;}"
         )
 
-        # ── 第一部分：选股结果 ────────────────────────────────────────
+        # ── 第一部分：只保留选股结果 ────────────────────────────────────────
         sec1 = QtWidgets.QWidget(); sec1.setStyleSheet(f"background:{_BG};")
         v1 = QtWidgets.QVBoxLayout(sec1)
         v1.setContentsMargins(0, 0, 0, 0); v1.setSpacing(4)
@@ -182,11 +160,14 @@ class SignalView(QtWidgets.QWidget):
         v1.addLayout(hdr1)
 
         self._scan_table = _SortableTable()
-        self._scan_table.setColumnCount(5)
+        self._scan_table.setColumnCount(11)
         self._scan_table.setHorizontalHeaderLabels(
-            ["代码", "时间", "买入价",
-             "策略", "类型"])
+            ["代码", "买入时间", "买入价", "策略名称",
+             "回测笔数", "命中数", "命中率", "平均收益%", "总收益率", "综合评分", "最近买入日"])
         self._scan_table.setStyleSheet(_TBL_SS)
+        # 设置列宽
+        for i, w in enumerate([110, 110, 70, 100, 65, 60, 65, 75, 75, 70, 110]):
+            self._scan_table.setColumnWidth(i, w)
         self._scan_table.horizontalHeader().setStretchLastSection(True)
         self._scan_table.verticalHeader().setVisible(False)
         self._scan_table.setSelectionBehavior(
@@ -197,90 +178,7 @@ class SignalView(QtWidgets.QWidget):
         v1.addWidget(self._scan_table)
         splitter.addWidget(sec1)
 
-        # ── 第二部分：回测摘要 ────────────────────────────────────────
-        sec2 = QtWidgets.QWidget(); sec2.setStyleSheet(f"background:{_BG};")
-        v2 = QtWidgets.QVBoxLayout(sec2)
-        v2.setContentsMargins(0, 4, 0, 0); v2.setSpacing(6)
-        v2.addWidget(_lbl("◌ 回测摘要  Backtest Summary", _GRN, 13, True))
-
-        cards_row = QtWidgets.QHBoxLayout(); cards_row.setSpacing(8)
-        self._cards: Dict[str, _StatCard] = {}
-        for key, title, color in [
-            ("count",    "回测笔数",  _BLU),
-            ("hit_rate", "命中率",         _GRN),
-            ("avg_ret",  "平均收益",   _GRN),
-            ("max_ret",  "最大盈利",   _GRN),
-            ("min_ret",  "最大亏损",   _RED),
-            ("exit_tp",  "止盈退出",   _YLW),
-            ("exit_sl",  "止损退出",   _RED),
-            ("exit_mh",  "持仓到期",   _ORG),
-        ]:
-            card = _StatCard(title, color)
-            self._cards[key] = card
-            cards_row.addWidget(card, stretch=1)
-        v2.addLayout(cards_row)
-        splitter.addWidget(sec2)
-
-        # ── 第三部分：触发明细 ────────────────────────────────────────
-        sec3 = QtWidgets.QWidget(); sec3.setStyleSheet(f"background:{_BG};")
-        v3 = QtWidgets.QVBoxLayout(sec3)
-        v3.setContentsMargins(0, 4, 0, 0); v3.setSpacing(4)
-
-        hdr3 = QtWidgets.QHBoxLayout()
-        hdr3.addWidget(_lbl("◌ 触发明细  Trigger Detail", _YLW, 13, True))
-        hdr3.addStretch()
-        self._detail_count_lbl = _lbl("共 0 笔", _MUT, 12)
-        hdr3.addWidget(self._detail_count_lbl)
-
-        self._sort_cb = QtWidgets.QComboBox()
-        self._sort_cb.addItems([
-            "按收益% 降序",
-            "按收益% 升序",
-            "按持仓天 升序",
-            "按代码 A→Z",
-        ])
-        self._sort_cb.setFixedWidth(130)
-        self._sort_cb.setEnabled(False)
-        self._sort_cb.setStyleSheet(
-            f"QComboBox{{background:{_PAN2};color:{_FG};"
-            f"border:1px solid {_BORD};border-radius:4px;"
-            f"padding:2px 8px;font-size:12px;}}"
-            f"QComboBox QAbstractItemView{{background:{_PAN2};color:{_FG};}}"
-        )
-        self._sort_cb.currentIndexChanged.connect(self._on_sort_changed)
-        hdr3.addWidget(_lbl("排序：", _MUT, 12))
-        hdr3.addWidget(self._sort_cb)
-
-        self._btn_export_bt = QtWidgets.QPushButton("导出 CSV")
-        self._btn_export_bt.setStyleSheet(
-            f"QPushButton{{background:{_PANEL};color:{_YLW};"
-            f"border:1px solid {_YLW};border-radius:4px;"
-            f"padding:3px 10px;font-size:12px;}}"
-            f"QPushButton:hover{{background:{_YLW};color:#1e1e2e;}}"
-        )
-        self._btn_export_bt.clicked.connect(self._export_bt_csv)
-        hdr3.addWidget(self._btn_export_bt)
-        v3.addLayout(hdr3)
-
-        self._detail_table = _SortableTable()
-        self._detail_table.setColumnCount(9)
-        self._detail_table.setHorizontalHeaderLabels([
-            "代码", "买入日", "卖出日",
-            "持仓天", "买入价", "卖出价",
-            "收益%", "命中率", "退出原因",
-        ])
-        self._detail_table.setStyleSheet(_TBL_SS)
-        self._detail_table.horizontalHeader().setStretchLastSection(True)
-        self._detail_table.verticalHeader().setVisible(False)
-        self._detail_table.setSelectionBehavior(
-            QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
-        self._detail_table.setEditTriggers(
-            QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
-        self._detail_table.clicked.connect(self._on_detail_row_clicked)
-        v3.addWidget(self._detail_table)
-        splitter.addWidget(sec3)
-
-        splitter.setSizes([200, 130, 400])
+        splitter.setSizes([500])
         root.addWidget(splitter, 1)
 
     # ── 数据加载（对外接口） ─────────────────────────────────────────
@@ -294,17 +192,11 @@ class SignalView(QtWidgets.QWidget):
             self._scan_sigs = []
             self._hit_map   = _hit_rate_map(self._bt_sigs)
             self._fill_scan_from_bt()
-            self._fill_summary(batch)
-            self._fill_detail(self._bt_sigs)
-            self._sort_cb.setEnabled(True)
         else:
             self._scan_sigs = list(batch.signals)
             self._bt_sigs   = []
             self._hit_map   = {}
             self._fill_scan_only()
-            self._clear_summary()
-            self._fill_detail([])
-            self._sort_cb.setEnabled(False)
 
     def load_signals(self, signals: list) -> None:
         self._scan_sigs = list(signals)
@@ -312,186 +204,218 @@ class SignalView(QtWidgets.QWidget):
 
     def clear(self) -> None:
         self._scan_table.setRowCount(0)
-        self._detail_table.setRowCount(0)
-        self._clear_summary()
         self._scan_count_lbl.setText("共 0 只")
-        self._detail_count_lbl.setText("共 0 笔")
 
     # ── 填充第一部分 ─────────────────────────────────────────────────
 
     def _fill_scan_only(self) -> None:
         t = self._scan_table
-        t.setColumnCount(5)
-        t.setHorizontalHeaderLabels([
-            "代码", "时间", "买入价",
-            "策略", "类型"])
         t.setRowCount(0)
         for s in self._scan_sigs:
-            t.add_row([
-                (s.symbol,         _FG,  s.symbol),
-                (str(s.dt)[:10],   _MUT, str(s.dt)[:10]),
-                (f"{s.price:.2f}", _FG,  s.price),
-                (s.strategy_name,  _BLU, s.strategy_name),
-                (s.signal_type.value,
-                 _GRN if s.signal_type == SignalType.BUY else _RED,
-                 s.signal_type.value),
-            ])
-        t.resizeColumnsToContents()
+            self._add_scan_row(s)
         self._scan_count_lbl.setText(f"共 {len(self._scan_sigs)} 只")
 
     def _fill_scan_from_bt(self) -> None:
-        """回测模式：按股票聚合，显示回测笔数/命中率/平均收益/最近买入日。"""
         t = self._scan_table
-        t.setColumnCount(5)
-        t.setHorizontalHeaderLabels([
-            "代码", "回测笔数",
-            "命中率", "平均收益%",
-            "最近买入日"])
         t.setRowCount(0)
-        from collections import defaultdict
-        by_sym: Dict[str, list] = defaultdict(list)
+        added = set()
         for s in self._bt_sigs:
-            by_sym[s.symbol].append(s)
-        rows = []
-        for sym, sigs in by_sym.items():
-            n     = len(sigs)
-            wins  = sum(1 for s in sigs if s.pnl_pct > 0)
-            hr    = wins / n * 100
-            avg_r = sum(s.pnl_pct for s in sigs) / n * 100
-            latest = max(str(s.dt)[:10] for s in sigs)
-            rows.append((sym, n, hr, avg_r, latest))
-        rows.sort(key=lambda r: r[3], reverse=True)
-        for sym, n, hr, avg_r, latest in rows:
-            hr_c = _GRN if hr >= 60 else (_RED if hr < 40 else _YLW)
-            ar_c = _GRN if avg_r > 0 else _RED
-            t.add_row([
-                (sym,              _FG,  sym),
-                (str(n),           _BLU, n),
-                (f"{hr:.0f}%",     hr_c, hr),
-                (f"{avg_r:+.2f}%", ar_c, avg_r),
-                (latest,           _MUT, latest),
-            ])
-        t.resizeColumnsToContents()
-        self._scan_count_lbl.setText(f"共 {len(rows)} 只")
+            sym = s.symbol
+            if sym not in added:
+                self._add_scan_row(s)
+                added.add(sym)
+        self._scan_count_lbl.setText(f"共 {len(added)} 只")
 
-    # ── 填充第二部分 ─────────────────────────────────────────────────
+    def _add_scan_row(self, rec: SignalRecord) -> None:
+        from collections import defaultdict
+        
+        dt_str = str(rec.dt)
+        if " 00:00:00" in dt_str:
+            dt_str = dt_str[:10]
+        else:
+            dt_str = dt_str[:16]
+        
+        # 计算统计信息
+        total_cnt = 0
+        hit_cnt = 0
+        hit_rate = ""
+        if self._hit_map and rec.symbol in self._hit_map:
+            # _hit_map 已经是 "hit/total (pct%)" 格式，解析出各部分
+            text = self._hit_map[rec.symbol]
+            if "/" in text:
+                hit_part, rest = text.split("/", 1)
+                hit_cnt = int(hit_part)
+                total_cnt = int(rest.split("(", 1)[0])
+                hit_rate = text.split("(")[-1].rstrip(")")
+        
+        # 最近买入日期
+        latest_dt_str = dt_str
+        if self._bt_sigs:
+            # 找这只股票最新的买入日期
+            sym_signals = [s for s in self._bt_sigs if s.symbol == rec.symbol]
+            if sym_signals:
+                latest_sig = max(sym_signals, key=lambda s: s.dt)
+                ld = str(latest_sig.dt)
+                if " 00:00:00" in ld:
+                    latest_dt_str = ld[:10]
+                else:
+                    latest_dt_str = ld[:16]
+        
+        # 颜色判断：命中率越高越绿
+        pct = 0.0
+        avg_ret = 0.0
+        total_ret = 0.0
+        score = 0.0
+        color_score = _FG
+        
+        if total_cnt > 0:
+            pct = hit_cnt / total_cnt
+            
+            # 计算平均收益和总收益率
+            sym_signals = [s for s in self._bt_sigs if s.symbol == rec.symbol]
+            if sym_signals:
+                total_pct = sum(s.pnl_pct for s in sym_signals if s.pnl_pct is not None)
+                avg_ret = total_pct / len(sym_signals) * 100
+                # 总收益率 = (1+每个单次收益率) 相乘 - 1，复利计算
+                compound = 1.0
+                for s in sym_signals:
+                    if s.pnl_pct is not None:
+                        compound *= (1 + s.pnl_pct)
+                total_ret = (compound - 1) * 100
+            
+            # 综合评分 = 命中率 × (1 + 平均收益) × sqrt(回测笔数)
+            # 综合考虑命中率、平均收益、样本数量
+            score = pct * (1 + avg_ret/100) * (total_cnt ** 0.5) * 100
+        
+        # 颜色：命中率绿色红色，评分同样颜色
+        color_pct = _GRN if pct >= 0.5 else _RED if pct < 0.3 else _FG
+        color_avg = _GRN if avg_ret > 0 else _RED if avg_ret < 0 else _FG
+        color_total = _GRN if total_ret > 0 else _RED if total_ret < 0 else _FG
+        color_score = _GRN if score >= 20 else _RED if score < 5 else _FG
+        
+        row = [
+            (rec.symbol, _FG, None),
+            (dt_str, _FG, None),
+            (f"{rec.price:.2f}", _FG, rec.price),
+            (rec.strategy_name, _FG, None),
+            (str(total_cnt), _FG, total_cnt),
+            (str(hit_cnt), _FG, hit_cnt),
+            (f"{pct*100:.0f}%", color_pct, pct),
+            (f"{avg_ret:.2f}", color_avg, avg_ret),
+            (f"{total_ret:.1f}%", color_total, total_ret),
+            (f"{score:.1f}", color_score, score),
+            (latest_dt_str, _MUT, None),
+        ]
+        self._scan_table.add_row(row)
 
-    def _fill_summary(self, batch: SignalBatch) -> None:
-        m = batch.backtest_metrics()
-        if not m["valid"]:
-            self._clear_summary(); return
-        exits = m.get("exit_reasons", {})
-        self._cards["count"].set(str(m["count"]))
-        self._cards["hit_rate"].set(f"{m['hit_rate']*100:.1f}%")
-        self._cards["avg_ret"].set(f"{m['avg_return']:+.2f}%")
-        self._cards["max_ret"].set(f"{m['max_return']:+.2f}%")
-        self._cards["min_ret"].set(f"{m['min_return']:+.2f}%")
-        self._cards["exit_tp"].set(
-            str(exits.get("trailing_stop", 0) + exits.get("take_profit", 0)))
-        self._cards["exit_sl"].set(str(exits.get("stop_loss", 0)))
-        self._cards["exit_mh"].set(str(exits.get("max_hold", 0)))
-
-    def _clear_summary(self) -> None:
-        for c in self._cards.values():
-            c.set("—")
-
-    # ── 填充第三部分 ─────────────────────────────────────────────────
-
-    def _fill_detail(self, sigs: List[SignalRecord]) -> None:
-        t = self._detail_table
-        t.setRowCount(0)
-        for s in sigs:
-            exit_dt  = str(s.exit_dt)[:10]   if s.exit_dt    else "—"
-            exit_px  = f"{s.exit_price:.2f}"  if s.exit_price else "—"
-            pnl_pct  = s.pnl_pct * 100        if s.pnl_pct is not None else 0.0
-            pnl_str  = f"{pnl_pct:+.2f}%"
-            pnl_c    = _GRN if pnl_pct > 0 else _RED
-            hr_str   = self._hit_map.get(s.symbol, "—")
-            rsn      = _reason_cn(s.exit_reason)
-            rsn_c    = {"\u8ffd\u8e2a\u6b62\u76c8": _GRN,
-                        "\u56fa\u5b9a\u6b62\u76c8": _GRN,
-                        "\u6b62\u635f": _RED,
-                        "\u6301\u4ed3\u5230\u671f": _ORG}.get(rsn, _MUT)
-            t.add_row([
-                (s.symbol,          _FG,   s.symbol),
-                (str(s.dt)[:10],    _MUT,  str(s.dt)[:10]),
-                (exit_dt,           _MUT,  exit_dt),
-                (str(s.hold_days),  _FG,   s.hold_days),
-                (f"{s.price:.2f}",  _FG,   s.price),
-                (exit_px,           _FG,   s.exit_price or 0.0),
-                (pnl_str,           pnl_c, pnl_pct),
-                (hr_str,            _YLW,  hr_str),
-                (rsn,               rsn_c, rsn),
-            ])
-        t.resizeColumnsToContents()
-        self._detail_count_lbl.setText(f"共 {len(sigs)} 笔")
-
-    # ── 排序 ────────────────────────────────────────────────────────
-
-    def _on_sort_changed(self, idx: int) -> None:
-        if not self._bt_sigs:
-            return
-        sigs = list(self._bt_sigs)
-        if   idx == 0: sigs.sort(key=lambda s: s.pnl_pct or 0, reverse=True)
-        elif idx == 1: sigs.sort(key=lambda s: s.pnl_pct or 0)
-        elif idx == 2: sigs.sort(key=lambda s: s.hold_days)
-        elif idx == 3: sigs.sort(key=lambda s: s.symbol)
-        self._hit_map = _hit_rate_map(sigs)
-        self._fill_detail(sigs)
-
-    # ── 行点击 ──────────────────────────────────────────────────────
-
-    def _on_scan_row_clicked(self, index: QtCore.QModelIndex) -> None:
-        row  = index.row()
-        item = self._scan_table.item(row, 0)
-        if item and self._bt_sigs:
-            sym  = item.text()
-            recs = [s for s in self._bt_sigs if s.symbol == sym]
-            if recs:
-                self.signal_selected.emit(recs[0])
-
-    def _on_detail_row_clicked(self, index: QtCore.QModelIndex) -> None:
-        row   = index.row()
-        s_item = self._detail_table.item(row, 0)
-        d_item = self._detail_table.item(row, 1)
-        if s_item and self._bt_sigs:
-            sym = s_item.text()
-            dt  = d_item.text() if d_item else ""
-            for s in self._bt_sigs:
-                if s.symbol == sym and str(s.dt)[:10] == dt:
-                    self.signal_selected.emit(s)
-                    break
-
-    # ── 导出 ────────────────────────────────────────────────────────
+    # ── 导出 CSV ──────────────────────────────────────────────────────
 
     def _export_scan_csv(self) -> None:
-        self._export_table(self._scan_table, "scan_results.csv")
-
-    def _export_bt_csv(self) -> None:
-        self._export_table(self._detail_table, "backtest_detail.csv")
-
-    def _export_table(self, table: QtWidgets.QTableWidget,
-                      default_name: str) -> None:
+        if not self._scan_sigs:
+            self._show_msg("没有选股结果可导出")
+            return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "导出", default_name, "CSV Files (*.csv)")
+            self, "导出选股结果", "", "CSV Files (*.csv);;All Files (*)")
         if not path:
             return
-        try:
-            with open(path, "w", newline="", encoding="utf-8-sig") as f:
-                w = csv.writer(f)
-                w.writerow([table.horizontalHeaderItem(c).text()
-                             for c in range(table.columnCount())])
-                for row in range(table.rowCount()):
-                    w.writerow([
-                        (table.item(row, col).text()
-                         if table.item(row, col) else "")
-                        for col in range(table.columnCount())
-                    ])
-            QtWidgets.QMessageBox.information(
-                self, "导出成功", f"已保存到：{path}")
-        except Exception as e:
-            QtWidgets.QMessageBox.warning(self, "导出失败", str(e))
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            w = csv.writer(f)
+            w.writerow(["代码", "买入时间", "买入价", "策略名称", "回测笔数", "命中数", "命中率",
+                       "平均收益%", "总收益率", "综合评分", "最近买入日"])
+            for s in self._scan_sigs:
+                dt_str = str(s.dt)
+                if " 00:00:00" in dt_str:
+                    dt_str = dt_str[:10]
+                else:
+                    dt_str = dt_str[:16]
+                
+                # 计算统计信息
+                total_cnt = 0
+                hit_cnt = 0
+                hit_rate_pct = 0.0
+                avg_ret = 0.0
+                total_ret = 0.0
+                score = 0.0
+                hit_rate_str = ""
+                if self._hit_map and s.symbol in self._hit_map:
+                    text = self._hit_map[s.symbol]
+                    if "/" in text:
+                        hit_part, rest = text.split("/", 1)
+                        hit_cnt = int(hit_part)
+                        total_cnt = int(rest.split("(", 1)[0])
+                        hit_rate_str = text.split("(")[-1].rstrip(")")
+                        hit_rate_pct = hit_cnt / total_cnt
+                
+                # 计算平均收益和总收益率
+                if total_cnt > 0 and self._bt_sigs:
+                    sym_signals = [sig for sig in self._bt_sigs if sig.symbol == s.symbol]
+                    if sym_signals:
+                        total_pct = sum(sig.pnl_pct for sig in sym_signals if sig.pnl_pct is not None)
+                        avg_ret = total_pct / len(sym_signals) * 100
+                        # 复利计算总收益率
+                        compound = 1.0
+                        for sig in sym_signals:
+                            if sig.pnl_pct is not None:
+                                compound *= (1 + sig.pnl_pct)
+                        total_ret = (compound - 1) * 100
+                        # 综合评分
+                        score = hit_rate_pct * (1 + avg_ret/100) * (total_cnt ** 0.5) * 100
+                
+                # 最近买入日期
+                latest_dt_str = dt_str
+                if self._bt_sigs:
+                    sym_signals = [sig for sig in self._bt_sigs if sig.symbol == s.symbol]
+                    if sym_signals:
+                        latest_sig = max(sym_signals, key=lambda sig: sig.dt)
+                        ld = str(latest_sig.dt)
+                        if " 00:00:00" in ld:
+                            latest_dt_str = ld[:10]
+                        else:
+                            latest_dt_str = ld[:16]
+                
+                w.writerow([s.symbol, dt_str, f"{s.price:.4f}",
+                           s.strategy_name, str(total_cnt), str(hit_cnt), hit_rate_str,
+                           f"{avg_ret:.2f}", f"{total_ret:.1f}%", f"{score:.1f}", latest_dt_str])
+        self._show_msg(f"已导出到 {path}")
+
+    # ── 点击事件 ──────────────────────────────────────────────────────
+
+    def _on_scan_row_clicked(self, index) -> None:
+        row = index.row()
+        sym_item = self._scan_table.item(row, 0)
+        if not sym_item:
+            return
+        sym = sym_item.text()
+        # 找到对应的信号记录转发给点击处理
+        found = None
+        for s in self._scan_sigs:
+            if s.symbol == sym:
+                found = s
+                break
+        if not found and self._bt_sigs:
+            for s in self._bt_sigs:
+                if s.symbol == sym:
+                    found = s
+                    break
+        if found:
+            self.signal_selected.emit(found)
+
+    def _show_msg(self, msg: str) -> None:
+        QtWidgets.QMessageBox.information(self, "提示", msg)
 
 
-# 向后兼容
-SignalResultView = SignalView
+def _hit_rate_map(signals: List[SignalRecord]) -> Dict[str, str]:
+    """按symbol统计命中率"""
+    from collections import defaultdict
+    cnt = defaultdict(int)
+    hit = defaultdict(int)
+    for s in signals:
+        cnt[s.symbol] += 1
+        if s.pnl_pct and s.pnl_pct > 0:
+            hit[s.symbol] += 1
+    result: Dict[str, str] = {}
+    for sym, total in cnt.items():
+        h = hit[sym]
+        pct = h / total * 100
+        result[sym] = f"{h}/{total} ({pct:.0f}%)"
+    return result

@@ -128,22 +128,39 @@ class ScanEngine:
             )
 
             peak_price  = entry_price
-            # 持仓上限用 strategy.params.max_hold_days
+            # 持仓上限：不管什么周期，都是按K线根数算最大持仓
+            # 日线：max_hold_days = N → 持仓N根 = N天
+            # 分钟线：max_hold_days = N → 持仓N根K线
             max_j       = min(i + sp.max_hold_days, len(all_bars) - 1)
             exit_bar    = max_j
             exit_price  = all_bars[max_j].close
             exit_reason = "max_hold"
-            hold_days   = 0
-
-            for j in range(i + 1, max_j + 1):
+            
+            # A股T+1规则：不能在买入日当天卖出，必须跳过买入日同日内剩余K线
+            # 找到第一个日期晚于买入日的K线作为可以卖出的起始点
+            entry_date = entry_bar.dt.date()
+            start_j = i + 1
+            if entry_bar.dt.hour != 0:  # 不是日线，才需要处理T+1
+                for j in range(i + 1, max_j + 1):
+                    j_date = all_bars[j].dt.date()
+                    if j_date > entry_date:
+                        start_j = j
+                        break
+                else:
+                    # 整个持仓剩余都在同一天，只能持有到最后一根K线平仓
+                    start_j = max_j
+            
+            # 现在从start_j开始检查卖出条件
+            hold_bars_count = 0
+            for j in range(start_j, max_j + 1):
                 cur_price = all_bars[j].close
-                hold_days = j - i
+                hold_bars_count = j - i
                 if cur_price > peak_price:
                     peak_price = cur_price
 
                 triggered, _ = self._eval_sell_tree(
                     strategy.sell_tree, symbol, entry_price,
-                    cur_price, peak_price, hold_days,
+                    cur_price, peak_price, hold_bars_count,
                     all_bars[:j + 1], sp,
                 )
                 if triggered:
@@ -151,14 +168,25 @@ class ScanEngine:
                     exit_price  = cur_price
                     exit_reason = self._exit_reason(
                         strategy.sell_tree, entry_price,
-                        cur_price, peak_price, hold_days,
+                        cur_price, peak_price, hold_bars_count,
                         all_bars[:j + 1], sp,
                     )
                     break
 
+            hold_bars = exit_bar - i
             raw_ret         = (exit_price - entry_price) / entry_price if entry_price > 0 else 0.0
+            
+            # 计算真实日历持仓天数
+            exit_dt = getattr(all_bars[exit_bar], "dt", None)
+            if exit_dt:
+                entry_date = entry_bar.dt.date()
+                exit_date = exit_dt.date()
+                hold_days = (exit_date - entry_date).days
+            else:
+                hold_days = hold_bars  # 无法获取日期的fallback
+            
             rec.exit_price  = exit_price
-            rec.exit_dt     = getattr(all_bars[exit_bar], "dt", None)
+            rec.exit_dt     = exit_dt
             rec.exit_reason = exit_reason
             rec.hold_days   = hold_days
             rec.pnl_pct     = raw_ret - cost
