@@ -66,9 +66,10 @@ def cond_weekly_ma_slope(ma_period=13, slope_window=5,
                      weight, f"{ma_period}周均线向上")
 
 
-def cond_ma_alignment(periods=None, weight=1.0) -> Condition:
+def cond_ma_alignment(periods=None, max_gap_pct=0.0, weight=1.0) -> Condition:
     return Condition(ConditionCategory.TREND, ConditionIndicator.MA_ALIGNMENT,
-                     {"periods": periods or [5, 10, 20, 60]},
+                     {"periods": periods or [5, 10, 20, 60],
+                      "max_gap_pct": max_gap_pct},
                      weight, "均线多头排列")
 
 
@@ -222,6 +223,20 @@ def cond_macd_death_sell(fast=12, slow=26, signal=9, weight=1.0) -> Condition:
     return Condition(ConditionCategory.EXIT, ConditionIndicator.MACD_DEATH_SELL,
                      {"fast": fast, "slow": slow, "signal": signal},
                      weight, "MACD死叉卖出")
+
+
+# ── 时间过滤条件 ──────────────────────────────────────────────────────
+
+def cond_time_of_day(min_time="14:30", max_time="15:00",
+                     weight=1.0) -> Condition:
+    """
+    日内时间过滤：要求当前K线时间落在 [min_time, max_time] 区间内。
+    仅对分钟级K线有意义；日线K线无日内时间，此条件恒不通过。
+    时间格式 "HH:MM"。
+    """
+    return Condition(ConditionCategory.TIME, ConditionIndicator.TIME_OF_DAY,
+                     {"min_time": min_time, "max_time": max_time},
+                     weight, f"时间{min_time}~{max_time}")
 
 
 # ── 通用反序列化 ──────────────────────────────────────────────────────

@@ -1,0 +1,4 @@
+SEQ+TIME passed=False score=0.000
+DAILY time passed=False (expect False)
+ROUNDTRIP passed=False score=0.000
+seq default_gap=15 recent_window=30

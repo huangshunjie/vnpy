@@ -66,7 +66,8 @@ class ConditionEngine:
             return check_weekly_ma_slope(wc, int(p.get("ma_period",13)),
                                          int(p.get("slope_window",5)), float(p.get("min_slope",0.0)))
         if ind == CI.MA_ALIGNMENT:
-            return check_ma_alignment(closes, p.get("periods", [5,10,20,60]))
+            return check_ma_alignment(closes, p.get("periods", [5,10,20,60]),
+                                      float(p.get("max_gap_pct", 0.0)))
         if ind == CI.NEW_HIGH_N:
             return check_new_high_n(closes, highs, int(p.get("n",20)))
 
@@ -140,8 +141,41 @@ class ConditionEngine:
                                     float(p.get("std_mult",2.0)), float(p.get("min",0.05)),
                                     float(p.get("max",9999.0)))
 
+        # ── 时间过滤 ──────────────────────────────────────────────────
+        if ind == CI.TIME_OF_DAY:
+            return self._check_time_of_day(p, bars)
+
         # 卖出条件由 eval_exit 处理，此处直接返回
         return False, 0.0
+
+    @staticmethod
+    def _check_time_of_day(p: dict, bars: list) -> Tuple[bool, float]:
+        """
+        判断当前（序列最后一根）K线的日内时间是否落在 [min_time, max_time]。
+        - 日线K线（时间为 00:00）视为无日内信息，恒不通过；
+        - 分钟K线按 HH:MM 比较。
+        """
+        if not bars:
+            return False, 0.0
+        dt = getattr(bars[-1], "dt", None)
+        if dt is None:
+            return False, 0.0
+        # 日线：小时和分钟都为0，无日内时间概念
+        if dt.hour == 0 and dt.minute == 0:
+            return False, 0.0
+        cur = dt.hour * 60 + dt.minute
+
+        def _parse(t: str, default: int) -> int:
+            try:
+                hh, mm = str(t).split(":")
+                return int(hh) * 60 + int(mm)
+            except Exception:
+                return default
+
+        lo = _parse(p.get("min_time", "14:30"), 14 * 60 + 30)
+        hi = _parse(p.get("max_time", "15:00"), 15 * 60)
+        ok = lo <= cur <= hi
+        return ok, 1.0 if ok else 0.0
 
     # ── 卖出条件评估（逐日模拟持仓时调用） ───────────────────────────
 

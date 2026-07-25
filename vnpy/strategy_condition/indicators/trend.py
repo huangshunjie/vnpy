@@ -49,10 +49,16 @@ def check_weekly_ma_slope(weekly_closes: List[float],
 
 
 def check_ma_alignment(closes: List[float],
-                        periods: List[int] = None) -> Tuple[bool, float]:
+                        periods: List[int] = None,
+                        max_gap_pct: float = 0.0) -> Tuple[bool, float]:
     """
     均线多头排列：MA(periods[0]) > MA(periods[1]) > ... > MA(periods[-1])
     默认 MA5 > MA10 > MA20 > MA60。
+
+    max_gap_pct：相邻均线之间的最大间距（百分比，如 1.0 表示 1%）。
+      - <=0 时不限制间距，score 越大表示排列越发散（原逻辑，间距越大分越高）；
+      - >0  时要求所有相邻均线间距均 <= max_gap_pct（表达"靠近"约束），
+             此时 score 越大表示均线越紧凑贴合。
     """
     if periods is None:
         periods = [5, 10, 20, 60]
@@ -65,10 +71,18 @@ def check_ma_alignment(closes: List[float],
     passed = all(ma_vals[i] > ma_vals[i + 1] for i in range(len(ma_vals) - 1))
     if not passed:
         return False, 0.0
-    # score：最小差距占较小均线的比例，表示排列强度
-    gaps = [(ma_vals[i] - ma_vals[i + 1]) / ma_vals[i + 1]
+    # 相邻均线间距（占较小均线的比例，%）
+    gaps = [(ma_vals[i] - ma_vals[i + 1]) / ma_vals[i + 1] * 100.0
             for i in range(len(ma_vals) - 1)]
-    score = min(min(gaps) / 0.02, 1.0)   # 差距 >= 2% 时满分
+    if max_gap_pct and max_gap_pct > 0:
+        # 靠近约束：所有相邻间距都必须 <= max_gap_pct
+        if any(g > max_gap_pct for g in gaps):
+            return False, 0.0
+        # score：间距越小（越贴合）分越高，取最大间距衡量
+        score = 1.0 - max(gaps) / max_gap_pct
+        return True, max(min(score, 1.0), 0.0)
+    # 无靠近约束：沿用原逻辑，间距 >= 2% 满分
+    score = min(min(gaps) / 100.0 / 0.02, 1.0)
     return True, max(score, 0.0)
 
 

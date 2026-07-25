@@ -130,11 +130,24 @@ _COND_LIBRARY = [
         ConditionIndicator.WEEKLY_MA_SLOPE,
         ConditionIndicator.MA_ALIGNMENT,
         ConditionIndicator.NEW_HIGH_N,
+        ConditionIndicator.TREND_STRENGTH,
+        ConditionIndicator.PRICE_ABOVE_MA,
+        ConditionIndicator.TREND_DAYS,
+        ConditionIndicator.TREND_INTACT,
+        ConditionIndicator.MA_BINDONG,
+        ConditionIndicator.TREND_SCORE,
     ]),
     ("🔄 回调  Pullback", [
         ConditionIndicator.PULLBACK_FROM_HIGH,
         ConditionIndicator.PULLBACK_PCT,
         ConditionIndicator.PULLBACK_TO_MA,
+        ConditionIndicator.PULLBACK_TO_MA5,
+        ConditionIndicator.PULLBACK_TO_MA10,
+        ConditionIndicator.PULLBACK_TO_MA20,
+        ConditionIndicator.PULLBACK_TO_MA30,
+        ConditionIndicator.FIRST_PULLBACK,
+        ConditionIndicator.SHRINK_PULLBACK,
+        ConditionIndicator.STRONG_PULLBACK_SCORE,
     ]),
     ("⚡ 动量  Momentum", [
         ConditionIndicator.MACD_GOLDEN,
@@ -146,16 +159,49 @@ _COND_LIBRARY = [
         ConditionIndicator.VOLUME_PRICE_UP,
         ConditionIndicator.VOLUME_RATIO,
         ConditionIndicator.VOLUME_SHRINK,
+        ConditionIndicator.VOLUME_UP_PHASE,
+        ConditionIndicator.VOLUME_LAYER,
+        ConditionIndicator.VOLUME_YIN_FILTER,
+        ConditionIndicator.FUND_INTENSITY,
     ]),
     ("🕯 K线行为  Kline", [
         ConditionIndicator.CONTINUOUS_RISE,
         ConditionIndicator.LIMIT_UP_COUNT,
         ConditionIndicator.BIG_YANG_COUNT,
         ConditionIndicator.KLINE_STRENGTH,
+        ConditionIndicator.KLINE_YIN,
+        ConditionIndicator.KLINE_YANG,
+        ConditionIndicator.KLINE_SHRINK_YIN,
+        ConditionIndicator.KLINE_VOL_YIN,
+        ConditionIndicator.KLINE_LONG_LOWER,
+        ConditionIndicator.KLINE_DOJI,
+        ConditionIndicator.KLINE_BIG_YANG,
+        ConditionIndicator.KLINE_LIMIT_UP,
+    ]),
+    ("💪 强势股  Strength", [
+        ConditionIndicator.STRENGTH_RETURN_N,
+        ConditionIndicator.STRENGTH_LIMIT_UP_COUNT,
+        ConditionIndicator.STRENGTH_BIG_YANG_COUNT,
+        ConditionIndicator.STRENGTH_VOL_BREAK,
+        ConditionIndicator.STRENGTH_SCORE,
+    ]),
+    ("📐 偏离  Deviation", [
+        ConditionIndicator.DEV_MA5,
+        ConditionIndicator.DEV_MA10,
+        ConditionIndicator.DEV_MA20,
+        ConditionIndicator.DEV_MA10_MA20,
+        ConditionIndicator.DEV_OVERBOUGHT,
+    ]),
+    ("🌍 市场环境  Market", [
+        ConditionIndicator.MARKET_INDEX_TREND,
+        ConditionIndicator.MARKET_RISK,
     ]),
     ("🌊 波动  Volatility", [
         ConditionIndicator.ATR_RATIO,
         ConditionIndicator.BOLL_WIDTH,
+    ]),
+    ("⏰ 时间  Time", [
+        ConditionIndicator.TIME_OF_DAY,
     ]),
     ("🚪 卖出  Exit", [
         ConditionIndicator.TRAILING_STOP,
@@ -164,6 +210,9 @@ _COND_LIBRARY = [
         ConditionIndicator.MA_BREAK_DOWN,
         ConditionIndicator.MACD_DEATH_SELL,
         ConditionIndicator.MAX_HOLD_DAYS,
+    ]),
+    ("🎯 评分  Score", [
+        ConditionIndicator.SCORE_NODE,
     ]),
 ]
 
@@ -240,6 +289,7 @@ class StrategyConditionWidget(QtWidgets.QWidget):
             ConditionCategory.VOLUME: _MAV,
             ConditionCategory.KLINE: _PNK,
             ConditionCategory.VOLATILITY: "#94e2d5",
+            ConditionCategory.TIME: "#f9e2af",
             ConditionCategory.EXIT: _RED,
         }
         for cat_name, indicators in _COND_LIBRARY:
@@ -269,6 +319,8 @@ class StrategyConditionWidget(QtWidgets.QWidget):
                     child.setForeground(0, QtGui.QColor(_MAV))
                 elif ind.value in ("PULLBACK_PCT","PULLBACK_FROM_HIGH","PULLBACK_TO_MA"):
                     child.setForeground(0, QtGui.QColor(_BLU))
+                elif ind.value == "TIME_OF_DAY":
+                    child.setForeground(0, QtGui.QColor("#f9e2af"))
                 else:
                     child.setForeground(0, QtGui.QColor(_FG))
                 parent_item.addChild(child)
