@@ -4,11 +4,37 @@ strategy_condition/ui/widget.py
 三栏布局：条件库 | 策略树编辑器+Tab切换 | 参数设置
 """
 from __future__ import annotations
+import sys
+import traceback
 from typing import Optional
 
 from vnpy.trader.ui import QtWidgets, QtCore, QtGui
 from vnpy.trader.engine import MainEngine
 from vnpy.trader.constant import Interval
+
+
+# ── 全局异常钩子：防止未捕获异常导致静默崩溃 ──────────────────────────
+def _global_exception_hook(exc_type, exc_value, exc_tb):
+    """安装为 sys.excepthook，确保所有未处理异常弹出可见的错误对话框"""
+    tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    print(f"[SCE] 未捕获异常:\n{tb_str}", flush=True)
+    try:
+        app = QtWidgets.QApplication.instance()
+        if app:
+            msg = QtWidgets.QMessageBox()
+            msg.setIcon(QtWidgets.QMessageBox.Icon.Critical)
+            msg.setWindowTitle("Strategy Condition Engine - 未捕获异常")
+            msg.setText(f"{exc_type.__name__}: {exc_value}")
+            msg.setDetailedText(tb_str)
+            msg.exec()
+    except Exception:
+        pass
+
+
+# 安装全局钩子（仅替换一次）
+if not getattr(sys, '_sce_excepthook_installed', False):
+    sys.excepthook = _global_exception_hook
+    sys._sce_excepthook_installed = True
 
 from ..constant import (NodeOp, ConditionCategory, ConditionIndicator,
                          SignalSource)
@@ -367,12 +393,12 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         )
 
         # 买入条件 Tab
-        self._buy_editor = ConditionTreeEditor()
+        self._buy_editor = ConditionTreeEditor(root_display_label="买入条件")
         self._buy_editor.tree_changed.connect(self._on_tree_changed)
         self._tab.addTab(self._buy_editor, "📈  买入条件  BUY")
 
         # 卖出条件 Tab
-        self._sell_editor = ConditionTreeEditor()
+        self._sell_editor = ConditionTreeEditor(root_display_label="卖出条件")
         self._sell_editor.tree_changed.connect(self._on_tree_changed)
         self._tab.addTab(self._sell_editor, "🚪  卖出条件  SELL")
 
@@ -394,18 +420,20 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         # 底部按钮行
         v.addWidget(_hline())
         btn_row = QtWidgets.QHBoxLayout()
-        self._btn_scan = _btn("▶  运行选股", _GRN)
-        self._btn_bt   = _btn("📊  回测验证", _BLU)
-        self._btn_save = _btn("💾  保存策略", _YLW)
-        self._btn_new  = _btn("＋  新建策略", _MAV)
-        self._btn_del  = _btn("🗑  删除策略", _RED)
+        self._btn_scan   = _btn("▶  运行选股", _GRN)
+        self._btn_bt     = _btn("📊  回测验证", _BLU)
+        self._btn_save   = _btn("💾  保存策略", _YLW)
+        self._btn_new    = _btn("＋  新建策略", _MAV)
+        self._btn_rename = _btn("✏  重命名", "#94e2d5")
+        self._btn_del    = _btn("🗑  删除策略", _RED)
         self._btn_scan.clicked.connect(self._on_scan)
         self._btn_bt.clicked.connect(self._on_backtest)
         self._btn_save.clicked.connect(self._on_save)
         self._btn_new.clicked.connect(self._on_new_strategy)
+        self._btn_rename.clicked.connect(self._on_rename_strategy)
         self._btn_del.clicked.connect(self._on_delete_strategy)
         for b in (self._btn_scan, self._btn_bt, self._btn_save,
-                  self._btn_new, self._btn_del):
+                  self._btn_new, self._btn_rename, self._btn_del):
             btn_row.addWidget(b)
         btn_row.addStretch()
         v.addLayout(btn_row)
@@ -806,6 +834,83 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         s = empty_strategy(name)
         self._load_strategy(s)
 
+    def _on_rename_strategy(self) -> None:
+        """重命名当前选中的已保存策略"""
+        cb  = self._strategy_cb
+        idx = cb.currentIndex()
+        txt = cb.currentText()
+
+        if not txt.startswith("[已保存]"):
+            self._show_msg(
+                "只能重命名 [已保存] 的策略，内置模板不可重命名。"
+            )
+            return
+
+        old_name = txt[len("[已保存] "):]
+        new_name, ok = QtWidgets.QInputDialog.getText(
+            self, "重命名策略",
+            "请输入新的策略名称：",
+            QtWidgets.QLineEdit.EchoMode.Normal,
+            old_name,
+        )
+        if not ok:
+            return
+        new_name = new_name.strip()
+        if not new_name:
+            self._show_msg("策略名称不能为空")
+            return
+        if new_name == old_name:
+            return
+
+        # 检查是否重名
+        for i in range(cb.count()):
+            if cb.itemText(i) == f"[已保存] {new_name}":
+                self._show_msg(f"已存在同名策略「{new_name}」，请换一个名称。")
+                return
+
+        # 磁盘上重命名文件
+        save_dir = self._strategy_save_dir()
+        old_safe = "".join(
+            c if c.isalnum() or c in "-_ " else "_" for c in old_name
+        )
+        new_safe = "".join(
+            c if c.isalnum() or c in "-_ " else "_" for c in new_name
+        )
+        old_fp = save_dir / f"{old_safe}.json"
+        new_fp = save_dir / f"{new_safe}.json"
+
+        # 更新策略对象
+        strategy = cb.itemData(idx)
+        if strategy:
+            strategy.meta.name = new_name
+            strategy.touch()
+            # 写入新文件
+            new_fp.write_text(strategy.to_json(), encoding="utf-8")
+            # 删除旧文件（如果不同名）
+            if old_fp.exists() and old_fp != new_fp:
+                old_fp.unlink()
+
+        # 引擎模式下也同步
+        if self._engine:
+            try:
+                self._engine.delete_strategy(old_name)
+                self._engine.save_strategy(strategy)
+            except Exception:
+                pass
+
+        # 更新 ComboBox 显示
+        cb.blockSignals(True)
+        cb.setItemText(idx, f"[已保存] {new_name}")
+        cb.setItemData(idx, strategy)
+        cb.blockSignals(False)
+
+        # 更新右侧名称输入框
+        self._name_edit.setText(new_name)
+        if self._strategy:
+            self._strategy.meta.name = new_name
+
+        self._show_msg(f"策略已重命名：「{old_name}」→「{new_name}」")
+
     def _on_delete_strategy(self) -> None:
         cb  = self._strategy_cb
         idx = cb.currentIndex()
@@ -854,13 +959,56 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         self._show_msg(f"策略「{name}」已删除")
 
     def _on_lib_double_click(self, item, _col) -> None:
-        ind = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
-        if ind is None:
-            return
-        # 判断当前 Tab：买入 or 卖出
-        tab_idx = self._tab.currentIndex()
-        editor  = self._sell_editor if tab_idx == 1 else self._buy_editor
-        editor.add_condition(ind)
+        """
+        双击条件库条目 → 添加到当前策略树。
+
+        崩溃根因与修复：
+          itemDoubleClicked 信号是在 Qt 的 mouseDoubleClickEvent 事件处理
+          链“内部同步”发射的。而 editor.add_condition() 内部会调用
+          load_tree() → QTreeWidget.clear()，销毁并重建策略树的
+          QTreeWidgetItem C++ 对象。若在双击事件链中同步执行，会 clear()
+          掉正在被 Qt 内部引用的 item，导致 C++ 层野指针 segfault——这种
+          崩溃无法被 Python 的 try/except 捕获，表现为程序直接闪退。
+
+          解决办法与 dropEvent 一致：先同步取出 indicator 与目标 editor
+          （item 属于“条件库树”，不会被重建，引用安全），再用
+          QTimer.singleShot(0, ...) 把真正的添加动作延迟到下一个事件循环，
+          此时 Qt 已完成双击事件处理，可以安全地 clear()/rebuild。
+        """
+        try:
+            ind = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+            if ind is None:
+                return
+            # 判断当前 Tab：买入 or 卖出
+            tab_idx = self._tab.currentIndex()
+            editor  = self._sell_editor if tab_idx == 1 else self._buy_editor
+            # 延迟到下一个事件循环执行，避开双击事件链中的 C++ 野指针陷阱
+            QtCore.QTimer.singleShot(
+                0, lambda e=editor, i=ind: self._do_add_condition(e, i))
+        except Exception as e:
+            self._show_add_cond_error(e)
+
+    def _do_add_condition(self, editor, ind) -> None:
+        """在下一个事件循环中真正执行添加条件（异常捕获 + 弹窗）"""
+        try:
+            editor.add_condition(ind)
+        except Exception as e:
+            self._show_add_cond_error(e)
+
+    def _show_add_cond_error(self, e: Exception) -> None:
+        """添加条件异常弹窗（崩溃前的诊断信息）"""
+        tb_str = "".join(
+            traceback.format_exception(type(e), e, e.__traceback__))
+        print(f"[SCE] 添加条件异常:\n{tb_str}", flush=True)
+        try:
+            msg = QtWidgets.QMessageBox(self)
+            msg.setIcon(QtWidgets.QMessageBox.Icon.Critical)
+            msg.setWindowTitle("添加条件异常")
+            msg.setText(f"双击添加条件时发生异常：\n{type(e).__name__}: {e}")
+            msg.setDetailedText(tb_str)
+            msg.exec()
+        except Exception:
+            pass
 
     def _on_tree_changed(self) -> None:
         if self._strategy:
