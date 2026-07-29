@@ -145,7 +145,54 @@ class ConditionEngine:
         if ind == CI.TIME_OF_DAY:
             return self._check_time_of_day(p, bars)
 
-        # 卖出条件由 eval_exit 处理，此处直接返回
+        # ── 卖出条件（纯技术面，不需要持仓上下文） ────────────────────
+        if ind == CI.MA_BREAK_DOWN:
+            mp = int(p.get("ma_period", 20))
+            if len(closes) < mp: return False, 0.0
+            ma = sum(closes[-mp:]) / mp
+            ok = closes[-1] < ma; return ok, 1.0 if ok else 0.0
+        if ind == CI.MACD_DEATH_SELL:
+            return check_macd_death(closes, int(p.get("fast", 12)),
+                                    int(p.get("slow", 26)), int(p.get("signal", 9)))
+
+        # ── 追踪止盈（纯技术面近似：从近期低点涨幅达标后从高点回撤达标） ──
+        if ind == CI.TRAILING_STOP:
+            tp_thr = float(p.get("take_profit", 15.0))
+            tr_thr = float(p.get("trail_drawdown", 10.0))
+            # 用最近 N 根K线的低点作为"入场价"近似
+            lookback = min(60, len(closes))
+            recent_closes = closes[-lookback:]
+            recent_low = min(recent_closes)
+            recent_high = max(recent_closes)
+            if recent_low <= 0:
+                return False, 0.0
+            # 从低点的涨幅
+            rise_pct = (recent_high - recent_low) / recent_low * 100
+            if rise_pct < tp_thr:
+                return False, 0.0
+            # 从高点的回撤
+            if recent_high <= 0:
+                return False, 0.0
+            dd_pct = (recent_high - closes[-1]) / recent_high * 100
+            ok = dd_pct >= tr_thr
+            return ok, 1.0 if ok else 0.0
+
+        # ── 止损（纯技术面近似：从近期高点回撤超过阈值） ────────────────
+        if ind == CI.STOP_LOSS:
+            thr = float(p.get("pct", 8.0))
+            lookback = min(60, len(closes))
+            recent_high = max(closes[-lookback:])
+            if recent_high <= 0:
+                return False, 0.0
+            dd = (recent_high - closes[-1]) / recent_high * 100
+            ok = dd >= thr
+            return ok, 1.0 if ok else 0.0
+
+        # ── 最大持仓天数（纯技术面无法判断，恒返回 False） ──────────────
+        if ind == CI.MAX_HOLD_DAYS:
+            return False, 0.0
+
+        # 其他未识别的条件
         return False, 0.0
 
     @staticmethod
@@ -217,7 +264,7 @@ class ConditionEngine:
             closes = [b.close for b in bars]; mp = int(p.get("ma_period", 20))
             if len(closes) < mp: return False, 0.0
             ma = sum(closes[-mp:]) / mp
-            ok = current_price < ma; return ok, 1.0 if ok else 0.0
+            ok = closes[-1] < ma; return ok, 1.0 if ok else 0.0
         if ind == CI.MACD_DEATH_SELL:
             if not bars: return False, 0.0
             return check_macd_death([b.close for b in bars], int(p.get("fast", 12)),

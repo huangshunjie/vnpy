@@ -1,4 +1,4 @@
-﻿"""
+﻿"""image.png
 market_behavior/ui/kline_view.py  —  K线图 Tab
 """
 from __future__ import annotations
@@ -182,6 +182,7 @@ class KlineChartWidget(QtWidgets.QWidget):
         splitter.addWidget(self._glw_vol)
         splitter.setStretchFactor(0, 7)
         splitter.setStretchFactor(1, 3)
+        self._splitter = splitter
         layout.addWidget(splitter, 1)
 
         self._vline = pg.InfiniteLine(angle=90, pen=pg.mkPen(_MUT, width=1,
@@ -194,6 +195,10 @@ class KlineChartWidget(QtWidgets.QWidget):
         self._proxy = pg.SignalProxy(
             self._main_plot.scene().sigMouseMoved,
             rateLimit=60, slot=self._on_mouse_moved)
+
+    def set_volume_visible(self, visible: bool) -> None:
+        """显示或隐藏成交量区域"""
+        self._glw_vol.setVisible(visible)
 
     def set_ma_flags(self, flags: list, show_triggers: bool = True,
                      show_candles: bool = True) -> None:
@@ -426,6 +431,8 @@ class KlineViewTab(QtWidgets.QWidget):
         self._current_symbol = ""
         self._current_buy_triggers: list = []
         self._current_sell_triggers: list = []
+        self._waveform_snapshots: list = []
+        self._waveform_dates: list = []
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -547,6 +554,12 @@ class KlineViewTab(QtWidgets.QWidget):
         self._candle_chk.setStyleSheet(f'color:{_C_UP};font-size:14px;background:transparent;')
         self._candle_chk.stateChanged.connect(self._on_ma_toggle)
         tl.addWidget(self._candle_chk)
+
+        self._vol_chk = QtWidgets.QCheckBox('成交量')
+        self._vol_chk.setChecked(True)
+        self._vol_chk.setStyleSheet(f'color:{_YLW};font-size:14px;background:transparent;')
+        self._vol_chk.stateChanged.connect(self._on_vol_toggle)
+        tl.addWidget(self._vol_chk)
 
         self._trig_chk = QtWidgets.QCheckBox('触发信号')
         self._trig_chk.setChecked(True)
@@ -742,6 +755,9 @@ class KlineViewTab(QtWidgets.QWidget):
             result.append((period, color, enabled))
         return result
 
+    def _on_vol_toggle(self, *_) -> None:
+        self._chart.set_volume_visible(self._vol_chk.isChecked())
+
     def _on_ma_toggle(self, *_) -> None:
         self._chart.set_ma_flags(
             self._get_ma_config(),
@@ -750,8 +766,13 @@ class KlineViewTab(QtWidgets.QWidget):
         )
         self._chart._redraw()
 
+    def set_waveform_data(self, snapshots: list, dates: list = None) -> None:
+        """设置波形数据（由 ConditionMonitorWidget 调用）"""
+        self._waveform_snapshots = snapshots
+        self._waveform_dates = dates or []
+
     def _on_fullscreen(self) -> None:
-        """弹出独立全屏 K 线图窗口。"""
+        """弹出独立全屏 K 线图窗口（含波形区）。"""
         if not self._chart._bars:
             return
         win = _KlineFullscreenWindow(
@@ -765,6 +786,8 @@ class KlineViewTab(QtWidgets.QWidget):
             show_candles=self._candle_chk.isChecked(),
             title=self._current_symbol,
             datetimes=getattr(self._chart, '_datetimes', None),
+            waveform_snapshots=self._waveform_snapshots,
+            waveform_dates=self._waveform_dates,
             parent=self,
         )
         win.showMaximized()
@@ -831,11 +854,15 @@ class _KlineFullscreenWindow(QtWidgets.QWidget):
                  ma_flags: list, show_triggers: bool,
                  show_candles: bool = True,
                  title: str = "", datetimes: list = None,
+                 waveform_snapshots: list = None,
+                 waveform_dates: list = None,
                  parent=None):
         super().__init__(parent, QtCore.Qt.WindowType.Window)
         self.setWindowTitle(f"K线图 全屏 — {title}")
         self.setStyleSheet(f"background:{_BG};")
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._waveform_snapshots = waveform_snapshots or []
+        self._waveform_dates = waveform_dates or []
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -920,7 +947,33 @@ class _KlineFullscreenWindow(QtWidgets.QWidget):
             bars, dates, volumes, buy_triggers, sell_triggers,
             ma_flags, show_triggers, show_candles,
             datetimes=datetimes)
-        layout.addWidget(self._chart, 1)
+
+        # 如果有波形数据，使用 splitter 显示 K线 + 波形
+        if self._waveform_snapshots:
+            splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+            splitter.setHandleWidth(5)
+            splitter.setStyleSheet(
+                "QSplitter::handle { background: #45475a; }"
+                "QSplitter::handle:hover { background: #89b4fa; }")
+            splitter.addWidget(self._chart)
+            # 创建波形视图
+            from .condition_monitor_widget import ConditionWaveformView
+            self._waveform_view = ConditionWaveformView()
+            self._waveform_view.load_data(
+                self._waveform_snapshots, self._waveform_dates)
+            splitter.addWidget(self._waveform_view)
+            splitter.setStretchFactor(0, 6)
+            splitter.setStretchFactor(1, 4)
+            layout.addWidget(splitter, 1)
+            # X 轴联动 + 竖线同步
+            wf_plots = self._waveform_view.get_plots()
+            main_plot = self._chart._main_plot
+            for wp in wf_plots:
+                wp.setXLink(main_plot)
+            # 建立十字线同步
+            self._setup_vline_sync()
+        else:
+            layout.addWidget(self._chart, 1)
 
         # 连接 MA 控件信号
         for chk in self._ma_enabled:
@@ -929,6 +982,55 @@ class _KlineFullscreenWindow(QtWidgets.QWidget):
             edt.editingFinished.connect(self._on_ma_toggle)
         self._candle_chk.stateChanged.connect(self._on_ma_toggle)
         self._trig_chk.stateChanged.connect(self._on_ma_toggle)
+
+    def _setup_vline_sync(self) -> None:
+        """建立 K线区 ↔ 波形区的竖线同步。"""
+        chart = self._chart
+        main_plot = chart._main_plot
+        waveform_view = self._waveform_view
+
+        # 替换 chart 原有的鼠标监听，增加波形竖线同步
+        try:
+            chart._proxy.disconnect()
+        except Exception:
+            pass
+
+        def _on_mouse_moved_synced(evt):
+            pos = evt[0]
+            if main_plot.sceneBoundingRect().contains(pos):
+                mp = main_plot.vb.mapSceneToView(pos)
+                x = mp.x()
+                chart._vline.setPos(x)
+                chart._hline.setPos(mp.y())
+                waveform_view.set_vline_pos(x)
+                # 更新信息栏
+                chart._on_mouse_moved(evt)
+            else:
+                waveform_view.hide_vlines()
+
+        chart._proxy = pg.SignalProxy(
+            main_plot.scene().sigMouseMoved,
+            rateLimit=60, slot=_on_mouse_moved_synced)
+
+        # 波形区鼠标移动 → 同步竖线到 K 线区
+        wf_plots = waveform_view.get_plots()
+        for wp in wf_plots:
+            scene = wp.scene()
+            if scene:
+                def _make_wave_handler(wave_plot):
+                    def _handler(evt):
+                        pos = evt[0]
+                        if wave_plot.sceneBoundingRect().contains(pos):
+                            mp = wave_plot.vb.mapSceneToView(pos)
+                            x = mp.x()
+                            chart._vline.setPos(x)
+                            chart._vline.setVisible(True)
+                            waveform_view.set_vline_pos(x)
+                    return _handler
+                pg.SignalProxy(
+                    scene.sigMouseMoved,
+                    rateLimit=60,
+                    slot=_make_wave_handler(wp))
 
     def _on_ma_toggle(self, *_) -> None:
         colors = ['#f9e2af', '#94e2d5', '#89b4fa', '#cba6f7', '#f5c2e7', '#a6e3a1']
@@ -1013,6 +1115,7 @@ class _FullscreenChart(QtWidgets.QWidget):
         splitter.addWidget(self._glw_vol)
         splitter.setStretchFactor(0, 7)
         splitter.setStretchFactor(1, 3)
+        self._glw_vol.setVisible(False)
         layout.addWidget(splitter, 1)
 
         self._vline = pg.InfiniteLine(angle=90, pen=pg.mkPen(_MUT, width=1,

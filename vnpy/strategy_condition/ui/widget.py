@@ -78,7 +78,9 @@ _POOL_STAR = [
 
 
 class _BarAdapter:
-    """Wraps VeighNa BarData to expose .open/.high/.low/.close/.volume/.dt"""
+    """Wraps VeighNa BarData to expose .open/.high/.low/.close/.volume/.dt
+    Also provides .open_price/.high_price/.low_price/.close_price/.datetime
+    aliases for compatibility with KlineChartWidget."""
     __slots__ = ("_b",)
     def __init__(self, bar) -> None: self._b = bar
     @property
@@ -93,6 +95,17 @@ class _BarAdapter:
     def volume(self) -> float: return float(self._b.volume)
     @property
     def dt(self):              return self._b.datetime
+    # Aliases for KlineChartWidget compatibility
+    @property
+    def open_price(self) -> float: return self._b.open_price
+    @property
+    def high_price(self) -> float: return self._b.high_price
+    @property
+    def low_price(self) -> float: return self._b.low_price
+    @property
+    def close_price(self) -> float: return self._b.close_price
+    @property
+    def datetime(self): return self._b.datetime
 
 _BG   = "#1e1e2e"; _PANEL = "#181825"; _PAN2 = "#11111b"
 _BORD = "#45475a"; _FG   = "#cdd6f4"; _MUT  = "#6c7086"
@@ -255,6 +268,7 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         self._event_engine = event_engine
         self._engine       = main_engine.get_engine("StrategyCondition")
         self._strategy: Optional[Strategy] = None
+        self._last_bars_dict: dict = {}  # 保存最近一次加载的K线数据
         self._init_ui()
         self._load_builtin_templates()
 
@@ -363,6 +377,7 @@ class StrategyConditionWidget(QtWidgets.QWidget):
     def _build_mid(self) -> QtWidgets.QWidget:
         w = QtWidgets.QWidget()
         w.setStyleSheet(f"background:{_BG};")
+        w.setMinimumWidth(400)  # 允许中间栏缩小，让右栏可以向左扩展
         v = QtWidgets.QVBoxLayout(w)
         v.setContentsMargins(16, 14, 16, 14)
         v.setSpacing(8)
@@ -414,6 +429,15 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         # K线图 Tab
         self._kline_tab = KlineViewTab()
         self._tab.addTab(self._kline_tab, "📈  K线图  Chart")
+
+        # 条件监控 Tab（延迟导入，避免阻塞 app 加载）
+        try:
+            from .condition_monitor_widget import ConditionMonitorWidget
+            self._monitor_tab = ConditionMonitorWidget()
+            self._tab.addTab(self._monitor_tab, "🔍  条件监控  Monitor")
+        except Exception as e:
+            print(f"[SCE] Monitor Tab 加载失败: {e}")
+            self._monitor_tab = None
 
         v.addWidget(self._tab, 1)
 
@@ -758,6 +782,60 @@ class StrategyConditionWidget(QtWidgets.QWidget):
             f"  最大持仓 {sp.max_hold_days} 天"
         )
 
+    def _feed_monitor(self, symbol: str,
+                      buy_dates: list = None,
+                      sell_dates: list = None) -> None:
+        """
+        为指定股票生成条件监控快照并加载到 Monitor Tab。
+        自动加载 K 线数据，无需外部传入。
+
+        Args:
+            symbol: 股票代码
+            buy_dates: 回测/选股产生的买入信号日期列表（与 Chart tab 一致）
+            sell_dates: 回测/选股产生的卖出信号日期列表（与 Chart tab 一致）
+        """
+        print(f"[SCE] _feed_monitor called for {symbol}")
+        if self._monitor_tab is None:
+            print("[SCE] _feed_monitor: monitor_tab is None")
+            return
+        if not self._strategy:
+            print("[SCE] _feed_monitor: strategy is None")
+            return
+        
+        try:
+            # 加载该股票的 K 线数据
+            n_bars = self._nbars_sp.value()
+            bars_dict = self._load_bars([symbol], n_bars)
+            bars = bars_dict.get(symbol, [])
+            
+            if not bars:
+                print(f"[SCE] _feed_monitor: no bars loaded for {symbol}")
+                return
+            print(f"[SCE] _feed_monitor: loaded {len(bars)} bars for {symbol}")
+            
+            from ..monitor.condition_monitor_engine import ConditionMonitorEngine
+            from ..engine.condition_engine import ConditionEngine
+            ce = ConditionEngine()
+            monitor_eng = ConditionMonitorEngine(ce)
+            snapshots = monitor_eng.generate_snapshots(
+                symbol=symbol,
+                bars=bars,
+                strategy=self._strategy,
+            )
+            print(f"[SCE] _feed_monitor: generated {len(snapshots)} snapshots")
+            
+            self._monitor_tab.load_snapshots(
+                symbol, snapshots,
+                bars=bars,
+                buy_dates=buy_dates or [],
+                sell_dates=sell_dates or [],
+            )
+            print(f"[SCE] _feed_monitor: loaded snapshots to monitor tab")
+        except Exception as e:
+            import traceback
+            print(f"[SCE] Monitor 快照生成失败: {e}")
+            traceback.print_exc()
+
     def _on_signal_selected(self, rec) -> None:
         """
         信号结果行被点击时，自动切换到 K线图 Tab 并进行渲染。
@@ -821,6 +899,9 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         self._kline_tab._interval_cb.setCurrentIndex(current_idx)
         
         self._kline_tab.show_symbol(symbol, buy_dates=buy_dates, sell_dates=sell_dates)
+
+        # ── 同步 Monitor Tab（传递相同的回测信号）──
+        self._feed_monitor(symbol, buy_dates=buy_dates, sell_dates=sell_dates)
 
     def _on_strategy_changed(self, idx: int) -> None:
         s = self._strategy_cb.itemData(idx)
