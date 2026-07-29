@@ -601,6 +601,12 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         self._hold_sp.setStyleSheet(_SPIN_SS)
         v.addWidget(self._hold_sp)
 
+        v.addWidget(_lbl("卖出后冷却期（交易日）", _MUT, 12))
+        self._cooldown_sp = QtWidgets.QSpinBox()
+        self._cooldown_sp.setRange(0, 30); self._cooldown_sp.setValue(3)
+        self._cooldown_sp.setStyleSheet(_SPIN_SS)
+        v.addWidget(self._cooldown_sp)
+
         v.addWidget(_lbl("止损触发 (%)", _MUT, 12))
         self._sl_sp = QtWidgets.QDoubleSpinBox()
         self._sl_sp.setRange(0.0, 50.0); self._sl_sp.setValue(8.0)
@@ -732,6 +738,7 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         self._sell_editor.load_tree(self._strategy.sell_tree)
         self._name_edit.setText(self._strategy.name)
         self._hold_sp.setValue(self._strategy.params.max_hold_days)
+        self._cooldown_sp.setValue(self._strategy.params.cooldown_days)
         self._sl_sp.setValue(self._strategy.params.stop_loss_pct)
         self._tp_sp.setValue(self._strategy.params.take_profit_pct)
         self._trail_sp.setValue(self._strategy.params.trail_drawdown)
@@ -740,6 +747,7 @@ class StrategyConditionWidget(QtWidgets.QWidget):
     def _collect_params(self) -> StrategyParams:
         return StrategyParams(
             max_hold_days=   self._hold_sp.value(),
+            cooldown_days=   self._cooldown_sp.value(),
             stop_loss_pct=   self._sl_sp.value(),
             take_profit_pct= self._tp_sp.value(),
             trail_drawdown=  self._trail_sp.value(),
@@ -1095,6 +1103,54 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         if self._strategy:
             self._strategy.buy_tree  = self._buy_editor.get_tree()
             self._strategy.sell_tree = self._sell_editor.get_tree()
+            # ── 方向A同步：卖出条件节点参数 → 右侧面板 SpinBox ──
+            self._sync_sell_node_params_to_panel()
+
+    def _sync_sell_node_params_to_panel(self) -> None:
+        """
+        遍历卖出树中的条件节点，将关联参数同步到右侧面板的 SpinBox。
+        仅对 EXIT 类条件做同步（止损/止盈/追踪/最大持仓），避免误覆盖。
+        使用 blockSignals 防止循环触发。
+        """
+        if not self._strategy:
+            return
+        from ..constant import ConditionIndicator as CI
+        for cond in self._strategy.sell_tree.all_conditions():
+            ind = cond.indicator
+            if ind == CI.STOP_LOSS:
+                val = cond.params.get("pct")
+                if val is not None:
+                    self._sl_sp.blockSignals(True)
+                    self._sl_sp.setValue(float(val))
+                    self._sl_sp.blockSignals(False)
+            elif ind == CI.TAKE_PROFIT:
+                val = cond.params.get("pct")
+                if val is not None:
+                    self._tp_sp.blockSignals(True)
+                    self._tp_sp.setValue(float(val))
+                    self._tp_sp.blockSignals(False)
+            elif ind == CI.TRAILING_STOP:
+                tp_val = cond.params.get("take_profit")
+                dd_val = cond.params.get("trail_drawdown")
+                if tp_val is not None:
+                    self._tp_sp.blockSignals(True)
+                    self._tp_sp.setValue(float(tp_val))
+                    self._tp_sp.blockSignals(False)
+                if dd_val is not None:
+                    self._trail_sp.blockSignals(True)
+                    self._trail_sp.setValue(float(dd_val))
+                    self._trail_sp.blockSignals(False)
+            elif ind == CI.MAX_HOLD_DAYS:
+                val = cond.params.get("days")
+                if val is not None:
+                    self._hold_sp.blockSignals(True)
+                    self._hold_sp.setValue(int(val))
+                    self._hold_sp.blockSignals(False)
+        # 同步更新 strategy.params 以保证三方一致
+        self._strategy.params.max_hold_days = self._hold_sp.value()
+        self._strategy.params.stop_loss_pct = self._sl_sp.value()
+        self._strategy.params.take_profit_pct = self._tp_sp.value()
+        self._strategy.params.trail_drawdown = self._trail_sp.value()
 
     def _on_scan(self) -> None:
         if not self._strategy:

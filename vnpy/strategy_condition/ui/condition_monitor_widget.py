@@ -67,11 +67,21 @@ class ConditionWaveformView(QtWidgets.QWidget):
         return self._vlines
 
     def load_data(self, snapshots: List[ConditionSnapshot],
-                  dates: List[str] = None) -> None:
+                  dates: List[str] = None,
+                  buy_indices: List[int] = None,
+                  sell_indices: List[int] = None) -> None:
         """
         加载快照数据，生成波形图。
+
+        Args:
+            snapshots: 条件快照列表
+            dates: 日期字符串列表
+            buy_indices: 买入信号在 bars 中的索引列表（用于模拟持仓状态）
+            sell_indices: 卖出信号在 bars 中的索引列表（用于模拟持仓状态）
         """
         self._snapshots = snapshots
+        self._buy_indices = buy_indices or []
+        self._sell_indices = sell_indices or []
         self._plots.clear()
         self._vlines.clear()
         self._glw.clear()
@@ -146,25 +156,40 @@ class ConditionWaveformView(QtWidgets.QWidget):
             for cond_idx, name in enumerate(self._sell_names):
                 # 获取 indicator 类型
                 indicator = ""
+                max_days_threshold = 60
                 if snapshots[0].sell_details and cond_idx < len(snapshots[0].sell_details):
-                    indicator = snapshots[0].sell_details[cond_idx].indicator
+                    detail0 = snapshots[0].sell_details[cond_idx]
+                    indicator = detail0.indicator
+                    # 尝试从 threshold_desc 中提取天数阈值
+                    if indicator == "MAX_HOLD_DAYS":
+                        try:
+                            td = getattr(detail0, 'threshold_desc', '') or ''
+                            import re
+                            m = re.search(r'(\d+)', td)
+                            if m:
+                                max_days_threshold = int(m.group(1))
+                        except Exception:
+                            pass
 
                 # 确保名称不为空
                 display_name = name if name else (indicator or f"卖出条件{cond_idx+1}")
 
-                y = np.array([
-                    1.0 if (cond_idx < len(s.sell_details) and s.sell_details[cond_idx].passed)
-                    else 0.0
-                    for s in snapshots
-                ])
-                pass_count = int(y.sum())
-                print(f"[WaveView] SELL [{cond_idx}] '{display_name}' (ind={indicator}): {pass_count}/{n} passed, x_range=[{self._x_indices[0]:.0f}, {self._x_indices[-1]:.0f}]")
-
-                # 持仓上下文条件：标注"(需持仓)"并用灰色显示
+                # 持仓上下文条件：基于回测 buy/sell 信号模拟真实持仓状态
                 if indicator in _HOLD_CONTEXT_INDICATORS:
+                    y = self._compute_hold_days_waveform(
+                        snapshots, max_days_threshold)
                     display_name = f"{display_name}(需持仓)"
-                    self._add_waveform_row(row, display_name, y, _MUT, (108, 112, 134, 30))
+                    pass_count = int(y.sum())
+                    print(f"[WaveView] SELL [{cond_idx}] '{display_name}' (ind={indicator}): {pass_count}/{n} passed (simulated hold), x_range=[{self._x_indices[0]:.0f}, {self._x_indices[-1]:.0f}]")
+                    self._add_waveform_row(row, display_name, y, _RED, (243, 139, 168, 50))
                 else:
+                    y = np.array([
+                        1.0 if (cond_idx < len(s.sell_details) and s.sell_details[cond_idx].passed)
+                        else 0.0
+                        for s in snapshots
+                    ])
+                    pass_count = int(y.sum())
+                    print(f"[WaveView] SELL [{cond_idx}] '{display_name}' (ind={indicator}): {pass_count}/{n} passed, x_range=[{self._x_indices[0]:.0f}, {self._x_indices[-1]:.0f}]")
                     self._add_waveform_row(row, display_name, y, _RED, (243, 139, 168, 50))
                 row += 1
 
@@ -252,6 +277,50 @@ class ConditionWaveformView(QtWidgets.QWidget):
         self._glw.clear()
         self._glw.addLabel(text, row=0, col=0,
                            color=_MUT, size="12pt")
+
+    def _compute_hold_days_waveform(
+        self,
+        snapshots: List[ConditionSnapshot],
+        max_days: int,
+    ) -> np.ndarray:
+        """
+        基于 buy/sell indices 模拟持仓状态，计算 MAX_HOLD_DAYS 波形。
+
+        逻辑：
+        - 买入信号后开始计数持仓天数
+        - 卖出信号后持仓天数归零
+        - 当持仓天数 >= max_days 时，波形为 1（条件满足）
+        """
+        n = len(snapshots)
+        y = np.zeros(n)
+
+        if not self._buy_indices and not self._sell_indices:
+            return y
+
+        # 构建事件时间线：用 bar_index -> event_type
+        buy_set = set(self._buy_indices)
+        sell_set = set(self._sell_indices)
+
+        holding = False
+        hold_start_idx = -1
+
+        for i, snap in enumerate(snapshots):
+            bar_idx = snap.bar_index
+
+            if bar_idx in buy_set and not holding:
+                holding = True
+                hold_start_idx = i
+
+            if holding:
+                hold_days = i - hold_start_idx
+                if hold_days >= max_days:
+                    y[i] = 1.0
+
+            if bar_idx in sell_set and holding:
+                holding = False
+                hold_start_idx = -1
+
+        return y
 
     @staticmethod
     def _make_step_data_aligned(x_indices: np.ndarray, y: np.ndarray):
@@ -442,9 +511,17 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
                 f"<span style='color:#6c7086'>({len(bars)} bars)</span>")
 
             dates = [str(s.dt)[:10] for s in snapshots]
-            self._waveform_view.load_data(snapshots, dates)
+            self._waveform_view.load_data(
+                snapshots, dates,
+                buy_indices=buy_indices,
+                sell_indices=sell_indices,
+            )
             # 同步波形数据到 KlineViewTab（供全屏窗口使用）
-            self._kline_tab.set_waveform_data(snapshots, dates)
+            self._kline_tab.set_waveform_data(
+                snapshots, dates,
+                buy_indices=buy_indices,
+                sell_indices=sell_indices,
+            )
 
         # 建立三区同步
         if bars and snapshots:

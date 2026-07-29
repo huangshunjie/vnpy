@@ -766,10 +766,14 @@ class KlineViewTab(QtWidgets.QWidget):
         )
         self._chart._redraw()
 
-    def set_waveform_data(self, snapshots: list, dates: list = None) -> None:
+    def set_waveform_data(self, snapshots: list, dates: list = None,
+                          buy_indices: list = None,
+                          sell_indices: list = None) -> None:
         """设置波形数据（由 ConditionMonitorWidget 调用）"""
         self._waveform_snapshots = snapshots
         self._waveform_dates = dates or []
+        self._waveform_buy_indices = buy_indices or []
+        self._waveform_sell_indices = sell_indices or []
 
     def _on_fullscreen(self) -> None:
         """弹出独立全屏 K 线图窗口（含波形区）。"""
@@ -788,6 +792,8 @@ class KlineViewTab(QtWidgets.QWidget):
             datetimes=getattr(self._chart, '_datetimes', None),
             waveform_snapshots=self._waveform_snapshots,
             waveform_dates=self._waveform_dates,
+            waveform_buy_indices=getattr(self, '_waveform_buy_indices', []),
+            waveform_sell_indices=getattr(self, '_waveform_sell_indices', []),
             parent=self,
         )
         win.showMaximized()
@@ -856,6 +862,8 @@ class _KlineFullscreenWindow(QtWidgets.QWidget):
                  title: str = "", datetimes: list = None,
                  waveform_snapshots: list = None,
                  waveform_dates: list = None,
+                 waveform_buy_indices: list = None,
+                 waveform_sell_indices: list = None,
                  parent=None):
         super().__init__(parent, QtCore.Qt.WindowType.Window)
         self.setWindowTitle(f"K线图 全屏 — {title}")
@@ -863,6 +871,8 @@ class _KlineFullscreenWindow(QtWidgets.QWidget):
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
         self._waveform_snapshots = waveform_snapshots or []
         self._waveform_dates = waveform_dates or []
+        self._waveform_buy_indices = waveform_buy_indices or []
+        self._waveform_sell_indices = waveform_sell_indices or []
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -960,7 +970,9 @@ class _KlineFullscreenWindow(QtWidgets.QWidget):
             from .condition_monitor_widget import ConditionWaveformView
             self._waveform_view = ConditionWaveformView()
             self._waveform_view.load_data(
-                self._waveform_snapshots, self._waveform_dates)
+                self._waveform_snapshots, self._waveform_dates,
+                buy_indices=self._waveform_buy_indices,
+                sell_indices=self._waveform_sell_indices)
             splitter.addWidget(self._waveform_view)
             splitter.setStretchFactor(0, 6)
             splitter.setStretchFactor(1, 4)

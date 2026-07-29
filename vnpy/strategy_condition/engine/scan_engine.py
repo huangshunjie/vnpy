@@ -100,17 +100,43 @@ class ScanEngine:
         逐日滚动回测单只股票。
         所有止损/止盈/追踪/持仓上限阈值统一从 strategy.params 读取，
         并透传给 eval_exit，彻底消除双参数体系的不一致。
+        冷却期机制：卖出后 cooldown_days 交易日内禁止重新买入同一股票。
+        同日冲突规则：买入条件和卖出条件同时满足时，不执行任何操作（空仓）或只卖不买（持仓）。
         """
         signals: List[SignalRecord] = []
         eval_fn = self._ce.eval_condition
         sp      = strategy.params          # 唯一参数源
         cost    = sp.commission_rate + sp.stamp_duty_rate + sp.slippage_rate
+        
+        # 冷却期追踪：记录最近一次卖出的K线索引
+        last_exit_idx = -999  # 初始值确保不会误触发冷却
 
         i = warmup
         while i < len(all_bars) - 1:
+            #冷却期检查：如果距离上次卖出不足 cooldown_days 根K线，跳过买入判断
+            if i - last_exit_idx <= sp.cooldown_days:
+                i += 1
+                continue
+            
             bars_so_far = all_bars[:i + 1]
             passed, score = strategy.buy_tree.evaluate(symbol, bars_so_far, eval_fn)
             if not passed:
+                i += 1
+                continue
+            
+            # 同日冲突检查：买入条件满足时，也检查卖出条件是否同时满足
+            # 如果卖出条件也满足（空仓状态下），说明信号矛盾，不买入
+            sell_triggered, _ = self._eval_sell_tree(
+                strategy.sell_tree, symbol, 
+                entry_price=all_bars[i].close,  # 假设买入价
+                cur_price=all_bars[i].close, 
+                peak_price=all_bars[i].close,
+                hold_days=0,
+                bars=bars_so_far, 
+                sp=sp,
+            )
+            if sell_triggered:
+                # 同一根K线买入和卖出条件都满足 → 信号冲突，跳过
                 i += 1
                 continue
 
@@ -192,6 +218,9 @@ class ScanEngine:
             rec.pnl_pct     = raw_ret - cost
 
             signals.append(rec)
+            
+            # 更新冷却期追踪：记录本次卖出位置，后续 cooldown_days 根K线内禁止重新买入
+            last_exit_idx = exit_bar
             i = exit_bar + 1
 
         return signals
