@@ -72,10 +72,14 @@ class ScanEngine:
 
     def backtest(self, symbols: List[str], strategy: Strategy,
                  all_bars_dict: Dict[str, list],
-                 warmup: int = 60) -> SignalBatch:
+                 warmup: int = 60,
+                 is_intraday: bool = False) -> SignalBatch:
         """
         对每个 symbol 的全量 K 线做逐日滚动回测。
         卖出阈值统一来自 strategy.params。
+
+        Args:
+            is_intraday: 是否为分钟线回测（True时启用T+1规则）
         """
         batch = SignalBatch(
             batch_id=uuid.uuid4().hex[:10],
@@ -88,35 +92,40 @@ class ScanEngine:
             bars = all_bars_dict.get(sym, [])
             if len(bars) < warmup + 2:
                 continue
-            signals = self._backtest_symbol(sym, bars, strategy, warmup)
+            signals = self._backtest_symbol(sym, bars, strategy, warmup,
+                                            is_intraday=is_intraday)
             batch.signals.extend(signals)
         self._log(f"[ScanEngine] backtest {strategy.name}: "
                   f"{len(symbols)} 股 → {batch.count} 信号")
         return batch
 
     def _backtest_symbol(self, symbol: str, all_bars: list,
-                         strategy: Strategy, warmup: int) -> List[SignalRecord]:
+                         strategy: Strategy, warmup: int,
+                         is_intraday: bool = False) -> List[SignalRecord]:
         """
         逐日滚动回测单只股票。
         所有止损/止盈/追踪/持仓上限阈值统一从 strategy.params 读取，
         并透传给 eval_exit，彻底消除双参数体系的不一致。
         冷却期机制：卖出后 cooldown_days 交易日内禁止重新买入同一股票。
         同日冲突规则：买入条件和卖出条件同时满足时，不执行任何操作（空仓）或只卖不买（持仓）。
+        A股T+1：分钟线模式下，买入当天不可卖出，需等到下一个交易日。
         """
         signals: List[SignalRecord] = []
         eval_fn = self._ce.eval_condition
         sp      = strategy.params          # 唯一参数源
         cost    = sp.commission_rate + sp.stamp_duty_rate + sp.slippage_rate
         
-        # 冷却期追踪：记录最近一次卖出的K线索引
-        last_exit_idx = -999  # 初始值确保不会误触发冷却
+        # 冷却期追踪：记录最近一次卖出的 bar 索引（按 K 线根数计算冷却期）
+        last_exit_idx: int = -9999
 
         i = warmup
         while i < len(all_bars) - 1:
-            #冷却期检查：如果距离上次卖出不足 cooldown_days 根K线，跳过买入判断
-            if i - last_exit_idx <= sp.cooldown_days:
-                i += 1
-                continue
+            # 冷却期检查：距离上次卖出不足 cooldown_days 根K线，跳过买入
+            if sp.cooldown_days > 0:
+                bars_since_exit = i - last_exit_idx
+                if bars_since_exit <= sp.cooldown_days:
+                    i += 1
+                    continue
             
             bars_so_far = all_bars[:i + 1]
             passed, score = strategy.buy_tree.evaluate(symbol, bars_so_far, eval_fn)
@@ -154,19 +163,18 @@ class ScanEngine:
             )
 
             peak_price  = entry_price
-            # 持仓上限：不管什么周期，都是按K线根数算最大持仓
-            # 日线：max_hold_days = N → 持仓N根 = N天
-            # 分钟线：max_hold_days = N → 持仓N根K线
-            max_j       = min(i + sp.max_hold_days, len(all_bars) - 1)
+            # 持仓上限：统一按 K 线根数计算（用户自行根据周期设置合理值）
+            max_j = min(i + sp.max_hold_days, len(all_bars) - 1)
             exit_bar    = max_j
             exit_price  = all_bars[max_j].close
             exit_reason = "max_hold"
             
-            # A股T+1规则：不能在买入日当天卖出，必须跳过买入日同日内剩余K线
-            # 找到第一个日期晚于买入日的K线作为可以卖出的起始点
+            # A股T+1规则：买入当天不可卖出
+            # 日线模式：买入日就是当日，下一根K线就是下一个交易日，start_j = i+1 即可
+            # 分钟线模式：买入当天剩余的K线都不能卖出，需跳到下一个交易日
             entry_date = entry_bar.dt.date()
             start_j = i + 1
-            if entry_bar.dt.hour != 0:  # 不是日线，才需要处理T+1
+            if is_intraday:
                 for j in range(i + 1, max_j + 1):
                     j_date = all_bars[j].dt.date()
                     if j_date > entry_date:
@@ -177,12 +185,13 @@ class ScanEngine:
                     start_j = max_j
             
             # 现在从start_j开始检查卖出条件
-            hold_bars_count = 0
             for j in range(start_j, max_j + 1):
                 cur_price = all_bars[j].close
-                hold_bars_count = j - i
                 if cur_price > peak_price:
                     peak_price = cur_price
+
+                # hold_bars: 持仓K线根数（与 max_hold_days 同单位）
+                hold_bars_count = j - i
 
                 triggered, _ = self._eval_sell_tree(
                     strategy.sell_tree, symbol, entry_price,
@@ -219,7 +228,7 @@ class ScanEngine:
 
             signals.append(rec)
             
-            # 更新冷却期追踪：记录本次卖出位置，后续 cooldown_days 根K线内禁止重新买入
+            # 更新冷却期追踪：记录本次卖出的 bar 索引
             last_exit_idx = exit_bar
             i = exit_bar + 1
 
@@ -250,6 +259,37 @@ class ScanEngine:
             if passed:
                 return cond.indicator.value.lower()
         return "sell_tree"
+
+    # ── 辅助方法 ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _find_nth_trading_day(all_bars: list, start_idx: int, n_days: int) -> int:
+        """
+        从 start_idx 开始，找到第 n_days 个交易日结束时的 bar 索引。
+        用于分钟线下将 max_hold_days（交易日）转换为实际的 bar 索引上限。
+
+        例：start_idx 在第1天的 10:30，n_days=3
+        → 返回第4天（第1天+3天后）的最后一根K线索引
+        """
+        if n_days <= 0:
+            return min(start_idx + 1, len(all_bars) - 1)
+
+        start_date = all_bars[start_idx].dt.date()
+        days_passed = 0
+        last_valid_idx = start_idx
+
+        for j in range(start_idx + 1, len(all_bars)):
+            cur_date = all_bars[j].dt.date()
+            new_days = (cur_date - start_date).days
+            if new_days > days_passed:
+                days_passed = new_days
+                if days_passed > n_days:
+                    # 超过了 n_days 天，返回前一根K线（上一个交易日最后一根）
+                    return last_valid_idx
+            last_valid_idx = j
+
+        # 没有足够的数据，返回最后一根
+        return len(all_bars) - 1
 
     # ── 数据获取 ──────────────────────────────────────────────────────
 

@@ -243,21 +243,31 @@ class ConditionEngine:
         ret = (current_price - entry_price) / entry_price * 100
         CI  = ConditionIndicator
 
+        # ── 阈值取值策略：节点参数优先，StrategyParams 兜底 ──
+        # 语义变更（2026-08）：过去为 sp 覆盖节点，导致用户在条件编辑器
+        # 中调整止损/止盈/追踪/持仓阈值完全不生效，且 label 显示与实际
+        # 计算值三方不同步。现在改为节点自身 params 优先——只有当节点
+        # 未提供该键时才回退到全局 StrategyParams。
         if ind == CI.STOP_LOSS:
-            thr = sp.stop_loss_pct if sp is not None else float(p.get("pct", 8.0))
+            default_thr = sp.stop_loss_pct if sp is not None else 8.0
+            thr = float(p.get("pct", default_thr))
             ok  = ret <= -thr; return ok, 1.0 if ok else 0.0
         if ind == CI.TAKE_PROFIT:
-            thr = sp.take_profit_pct if sp is not None else float(p.get("pct", 15.0))
+            default_thr = sp.take_profit_pct if sp is not None else 15.0
+            thr = float(p.get("pct", default_thr))
             ok  = ret >= thr; return ok, 1.0 if ok else 0.0
         if ind == CI.TRAILING_STOP:
-            tp_thr = sp.take_profit_pct  if sp is not None else float(p.get("take_profit",  15.0))
-            tr_thr = sp.trail_drawdown    if sp is not None else float(p.get("trail_drawdown", 10.0))
+            default_tp = sp.take_profit_pct if sp is not None else 15.0
+            default_tr = sp.trail_drawdown  if sp is not None else 10.0
+            tp_thr = float(p.get("take_profit",  default_tp))
+            tr_thr = float(p.get("trail_drawdown", default_tr))
             if ret < tp_thr: return False, 0.0
             if peak_price <= 0: return False, 0.0
             dd = (peak_price - current_price) / peak_price * 100
             ok = dd >= tr_thr; return ok, 1.0 if ok else 0.0
         if ind == CI.MAX_HOLD_DAYS:
-            days = sp.max_hold_days if sp is not None else int(p.get("days", 60))
+            default_days = sp.max_hold_days if sp is not None else 60
+            days = int(p.get("days", default_days))
             ok   = hold_days >= days; return ok, 1.0 if ok else 0.0
         if ind == CI.MA_BREAK_DOWN:
             if not bars: return False, 0.0

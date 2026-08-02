@@ -114,15 +114,32 @@ class VolumeItem(GraphicsObject):
 
 
 class DateAxis(pg.AxisItem):
-    def __init__(self, dates: list, *args, **kwargs):
+    def __init__(self, dates: list, datetimes: list = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._dates = dates
+        self._datetimes = datetimes or []
+        # 判断是否为分钟线：存在相邻日期相同的情况
+        self._is_intraday = False
+        if len(dates) > 1:
+            self._is_intraday = any(
+                dates[i] == dates[i+1] for i in range(min(10, len(dates)-1)))
 
     def tickStrings(self, values, scale, spacing):
         out = []
         for v in values:
             i = int(v)
-            out.append(self._dates[i] if 0 <= i < len(self._dates) else "")
+            if not (0 <= i < len(self._dates)):
+                out.append("")
+                continue
+            if self._is_intraday and self._datetimes:
+                dt = self._datetimes[i]
+                # 每天第一根显示日期+时间，其余只显示时间
+                if i == 0 or self._dates[i] != self._dates[i-1]:
+                    out.append(dt.strftime("%m-%d\n%H:%M"))
+                else:
+                    out.append(dt.strftime("%H:%M"))
+            else:
+                out.append(self._dates[i])
         return out
 
 
@@ -238,11 +255,11 @@ class KlineChartWidget(QtWidgets.QWidget):
         n      = len(self._bars)
         closes = [b[3] for b in self._bars]
 
-        # 更新 X 轴日期
-        ax = DateAxis(self._dates, orientation="bottom")
+        # 更新 X 轴日期（传入 datetimes 支持分钟线智能显示）
+        ax = DateAxis(self._dates, datetimes=self._datetimes, orientation="bottom")
         ax.setTextPen(_MUT)
         self._main_plot.setAxisItems({"bottom": ax})
-        ax_v = DateAxis(self._dates, orientation="bottom")
+        ax_v = DateAxis(self._dates, datetimes=self._datetimes, orientation="bottom")
         ax_v.setTextPen(_MUT)
         self._vol_plot.setAxisItems({"bottom": ax_v})
 
@@ -639,8 +656,13 @@ class KlineViewTab(QtWidgets.QWidget):
         trigger_dates: 兼容旧接口，所有触发日期（当 buy/sell_dates 未提供时作为买入处理）
         """
         self._current_symbol = symbol
+        self._last_buy_dates = list(buy_dates or [])
+        self._last_sell_dates = list(sell_dates or [])
         self._sym_edit.setText(symbol)
         bars = self._load_bars(symbol)
+        # 保存原始 BarData 列表，供 Monitor Tab 复用
+        # 避免 Monitor tab 重新用不同周期加载数据库（会出现 “无数据”）
+        self._last_raw_bars = list(bars) if bars else []
         if not bars:
             self._title_lbl.setText(f'{symbol}  -- no data')
             self._title_lbl.setStyleSheet(
@@ -1151,10 +1173,10 @@ class _FullscreenChart(QtWidgets.QWidget):
         n = len(self._bars)
         closes = [b[3] for b in self._bars]
 
-        ax = DateAxis(self._dates, orientation="bottom")
+        ax = DateAxis(self._dates, datetimes=self._datetimes, orientation="bottom")
         ax.setTextPen(_MUT)
         self._main_plot.setAxisItems({"bottom": ax})
-        ax_v = DateAxis(self._dates, orientation="bottom")
+        ax_v = DateAxis(self._dates, datetimes=self._datetimes, orientation="bottom")
         ax_v.setTextPen(_MUT)
         self._vol_plot.setAxisItems({"bottom": ax_v})
 

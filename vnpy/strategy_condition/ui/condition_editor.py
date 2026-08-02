@@ -1234,17 +1234,75 @@ class _DraggableTreeWidget(QtWidgets.QTreeWidget):
 class ParamPanel(QtWidgets.QWidget):
     params_changed = QtCore.Signal(dict)
 
+    # 需要显示时间换算提示的参数名集合
+    _PERIOD_PARAMS = {
+        "ma_period", "slope_window", "window", "min_days", "days",
+        "lookback", "lookback_n", "n", "pullback_days", "vol_period",
+        "fast", "slow", "signal", "recent_window",
+    }
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._widgets: dict = {}
+        self._hint_labels: dict = {}  # key -> QLabel 用于动态更新提示
         self._layout = QtWidgets.QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(6)
         self._layout.addWidget(_lbl("选择条件后显示参数", _MUT, 12))
+        self._current_interval = None  # 当前K线周期
+        self._current_indicator = None  # 当前显示的指标
+
+    def set_interval(self, interval) -> None:
+        """外部设置当前K线周期，刷新已有的时间换算提示"""
+        self._current_interval = interval
+        self._update_all_hints()
+
+    def _update_all_hints(self) -> None:
+        """根据当前周期更新所有已有的时间提示标签"""
+        for key, hint_lbl in self._hint_labels.items():
+            widget = self._widgets.get(key)
+            if widget is None:
+                continue
+            if isinstance(widget, (QtWidgets.QSpinBox, QtWidgets.QDoubleSpinBox)):
+                val = int(widget.value())
+            else:
+                continue
+            hint_text = self._bars_to_time_hint(val)
+            hint_lbl.setText(hint_text)
+            hint_lbl.setVisible(bool(hint_text))
+
+    def _bars_to_time_hint(self, n_bars: int) -> str:
+        """将K线根数转换为人类可读的时间描述"""
+        from vnpy.trader.constant import Interval
+        interval = self._current_interval
+        if interval is None or interval == Interval.DAILY:
+            return ""  # 日线下不需要额外提示，"20"就是20天
+        # 分钟线：计算总分钟数
+        minutes_per_bar = {
+            Interval.MINUTE:    1,
+            Interval.MINUTE_5:  5,
+            Interval.MINUTE_15: 15,
+            Interval.MINUTE_30: 30,
+            Interval.HOUR:      60,
+        }
+        mpb = minutes_per_bar.get(interval, 1)
+        total_min = n_bars * mpb
+        if total_min >= 240:
+            days = total_min / 240
+            if days >= 2:
+                return f"  ≈ {days:.1f} 个交易日"
+            else:
+                return f"  ≈ {total_min/60:.1f} 小时"
+        elif total_min >= 60:
+            return f"  ≈ {total_min/60:.1f} 小时"
+        else:
+            return f"  ≈ {total_min} 分钟"
 
     def load(self, indicator: ConditionIndicator,
              current_params: Optional[dict] = None) -> None:
         self._widgets.clear()
+        self._hint_labels.clear()
+        self._current_indicator = indicator
         while self._layout.count():
             item = self._layout.takeAt(0)
             if item.widget():
@@ -1263,11 +1321,21 @@ class ParamPanel(QtWidgets.QWidget):
                 sp.setDecimals(2); sp.setSingleStep(0.5)
                 sp.setStyleSheet(ss); sp.valueChanged.connect(self._emit)
                 self._widgets[key] = sp; self._layout.addWidget(sp)
+                # 添加时间换算提示
+                if key in self._PERIOD_PARAMS:
+                    hint_lbl = self._add_period_hint(key, int(val))
+                    sp.valueChanged.connect(
+                        lambda v, k=key: self._on_period_value_changed(k, int(v)))
             elif isinstance(val, int):
                 sp = QtWidgets.QSpinBox()
                 sp.setRange(1, 9999); sp.setValue(val)
                 sp.setStyleSheet(ss); sp.valueChanged.connect(self._emit)
                 self._widgets[key] = sp; self._layout.addWidget(sp)
+                # 添加时间换算提示
+                if key in self._PERIOD_PARAMS:
+                    hint_lbl = self._add_period_hint(key, val)
+                    sp.valueChanged.connect(
+                        lambda v, k=key: self._on_period_value_changed(k, v))
             elif isinstance(val, str):
                 edit = QtWidgets.QLineEdit(val)
                 edit.setProperty("_is_str", True)
@@ -1311,6 +1379,27 @@ class ParamPanel(QtWidgets.QWidget):
                     try: result[key] = eval(w.text())
                     except Exception: result[key] = w.text()
         return result
+
+    def _add_period_hint(self, key: str, initial_value: int) -> QtWidgets.QLabel:
+        """为周期相关参数添加一个时间换算提示标签"""
+        hint_text = self._bars_to_time_hint(initial_value)
+        hint_lbl = QtWidgets.QLabel(hint_text)
+        hint_lbl.setStyleSheet(
+            f"color:#f9e2af;font-size:11px;background:transparent;"
+            f"border:none;padding:0 0 0 4px;")
+        hint_lbl.setVisible(bool(hint_text))
+        self._hint_labels[key] = hint_lbl
+        self._layout.addWidget(hint_lbl)
+        return hint_lbl
+
+    def _on_period_value_changed(self, key: str, value: int) -> None:
+        """当周期相关参数的SpinBox值改变时，更新对应的时间提示"""
+        hint_lbl = self._hint_labels.get(key)
+        if hint_lbl is None:
+            return
+        hint_text = self._bars_to_time_hint(value)
+        hint_lbl.setText(hint_text)
+        hint_lbl.setVisible(bool(hint_text))
 
     def _emit(self) -> None:
         self.params_changed.emit(self.get_params())
@@ -1860,8 +1949,24 @@ class ConditionTreeEditor(QtWidgets.QWidget):
         node: ConditionNode = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
         if node and node.op == NodeOp.LEAF and node.condition:
             p = self._param_panel.get_params()
-            node.condition.params = {k: v for k, v in p.items() if k != "weight"}
-            node.condition.weight = p.get("weight", 1.0)
+            new_params = {k: v for k, v in p.items() if k != "weight"}
+            new_weight = p.get("weight", 1.0)
+            node.condition.params = new_params
+            node.condition.weight = new_weight
+            # 同步刷新 label：条件 label 通常内嵌了阈值（如 "追踪止盈+15%回撤10%"），
+            # 参数变更后必须重生 label，否则会与实际计算参数脱节，误导用户。
+            # 工厂函数的形参名与 params 键名对绝大多数条件都对应，直接用
+            # **params 展开即可；对于少数不对应的（如 RSI 用 "min"/"max"），
+            # 捕获 TypeError 保留原 label。
+            meta = _COND_META.get(node.condition.indicator)
+            if meta:
+                _, factory, _ = meta
+                try:
+                    new_cond = factory(**new_params, weight=new_weight)
+                    if new_cond.label:
+                        node.condition.label = new_cond.label
+                except TypeError:
+                    pass
             self.load_tree(self._tree_data)
             self.tree_changed.emit()
 

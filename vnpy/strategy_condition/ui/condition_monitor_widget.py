@@ -150,47 +150,53 @@ class ConditionWaveformView(QtWidgets.QWidget):
             self._label_rows.add(row)
             row += 1
 
-            # 需要持仓上下文的指标（在纯技术评估中无法产生信号）
-            _HOLD_CONTEXT_INDICATORS = {"MAX_HOLD_DAYS"}
+            # ── 回测持仓段辅助波形（方案A）─────────────────────
+            # 语义：0/1 波形，高电平代表"回测在这根 K 线处于持仓段"。
+            # 用途：把"卖出条件"波形和此波形做视觉交集——
+            #   - 卖出条件亮 且 持仓段亮 → 回测在此点会真实卖出
+            #   - 卖出条件亮 且 持仓段暗 → 空仓/T+1/冷却期，回测不动作
+            #   - 卖出条件暗 且 持仓段亮 → 持仓中但无卖出信号，继续持有
+            hold_y = self._compute_backtest_position_waveform(snapshots)
+            hold_hits = int(hold_y.sum())
+            print(
+                f"[WaveView] BACKTEST POSITION: {hold_hits}/{n} bars in position "
+                f"(buy_idx={len(self._buy_indices)}, "
+                f"sell_idx={len(self._sell_indices)})"
+            )
+            # 用琥珀色，和绿/红都区分开
+            self._add_waveform_row(
+                row, "回测持仓段",
+                hold_y,
+                "#f9a825",              # 琥珀色前景线
+                (249, 168, 37, 55),     # 半透明琥珀色填充
+            )
+            row += 1
 
             for cond_idx, name in enumerate(self._sell_names):
                 # 获取 indicator 类型
                 indicator = ""
-                max_days_threshold = 60
                 if snapshots[0].sell_details and cond_idx < len(snapshots[0].sell_details):
                     detail0 = snapshots[0].sell_details[cond_idx]
                     indicator = detail0.indicator
-                    # 尝试从 threshold_desc 中提取天数阈值
-                    if indicator == "MAX_HOLD_DAYS":
-                        try:
-                            td = getattr(detail0, 'threshold_desc', '') or ''
-                            import re
-                            m = re.search(r'(\d+)', td)
-                            if m:
-                                max_days_threshold = int(m.group(1))
-                        except Exception:
-                            pass
 
                 # 确保名称不为空
                 display_name = name if name else (indicator or f"卖出条件{cond_idx+1}")
 
-                # 持仓上下文条件：基于回测 buy/sell 信号模拟真实持仓状态
-                if indicator in _HOLD_CONTEXT_INDICATORS:
-                    y = self._compute_hold_days_waveform(
-                        snapshots, max_days_threshold)
+                # 所有卖出条件统一从 snapshot 的 sell_details 中读取评估结果
+                # 监控引擎 _evaluate_bar() 已根据持仓上下文（entry_price, peak_price, hold_bars）
+                # 正确评估了每个卖出条件（含 TRAILING_STOP, MAX_HOLD_DAYS 等），
+                # 无持仓时全部为 False，有持仓时用 eval_exit() 精确计算。
+                y = np.array([
+                    1.0 if (cond_idx < len(s.sell_details) and s.sell_details[cond_idx].passed)
+                    else 0.0
+                    for s in snapshots
+                ])
+                # 对需要持仓上下文的指标添加标注
+                if indicator == "MAX_HOLD_DAYS":
                     display_name = f"{display_name}(需持仓)"
-                    pass_count = int(y.sum())
-                    print(f"[WaveView] SELL [{cond_idx}] '{display_name}' (ind={indicator}): {pass_count}/{n} passed (simulated hold), x_range=[{self._x_indices[0]:.0f}, {self._x_indices[-1]:.0f}]")
-                    self._add_waveform_row(row, display_name, y, _RED, (243, 139, 168, 50))
-                else:
-                    y = np.array([
-                        1.0 if (cond_idx < len(s.sell_details) and s.sell_details[cond_idx].passed)
-                        else 0.0
-                        for s in snapshots
-                    ])
-                    pass_count = int(y.sum())
-                    print(f"[WaveView] SELL [{cond_idx}] '{display_name}' (ind={indicator}): {pass_count}/{n} passed, x_range=[{self._x_indices[0]:.0f}, {self._x_indices[-1]:.0f}]")
-                    self._add_waveform_row(row, display_name, y, _RED, (243, 139, 168, 50))
+                pass_count = int(y.sum())
+                print(f"[WaveView] SELL [{cond_idx}] '{display_name}' (ind={indicator}): {pass_count}/{n} passed, x_range=[{self._x_indices[0]:.0f}, {self._x_indices[-1]:.0f}]")
+                self._add_waveform_row(row, display_name, y, _RED, (243, 139, 168, 50))
                 row += 1
 
         # 最后一行显示 X 轴日期
@@ -277,6 +283,64 @@ class ConditionWaveformView(QtWidgets.QWidget):
         self._glw.clear()
         self._glw.addLabel(text, row=0, col=0,
                            color=_MUT, size="12pt")
+
+    def _compute_backtest_position_waveform(
+        self,
+        snapshots: List[ConditionSnapshot],
+    ) -> np.ndarray:
+        """
+        构造"回测持仓段"波形（方案 A 辅助波形）。
+
+        高电平语义（=1）：
+            这根 K 线的 bar_index 落在某段 [buy_idx, sell_idx] 之内
+            —— 即回测在这一根上处于持仓状态。
+
+        规则：
+          - buy_idx 与 sell_idx 均来自 self._buy_indices / self._sell_indices，
+            由上层将 buy_dates / sell_dates 匹配到 bar 索引得到。
+          - 若某次买入之后没有对应的卖出（信号列表未成交出场），
+            视作持仓一直延续到序列末尾。
+          - buy_indices / sell_indices 会先分别排序再依次配对，防止
+            上游传入顺序不一致导致区间反向。
+        """
+        n = len(snapshots)
+        y = np.zeros(n, dtype=float)
+
+        buy_ix = sorted(self._buy_indices)
+        sell_ix = sorted(self._sell_indices)
+        if not buy_ix:
+            return y
+
+        # 配对 buy → next sell（严格 sell > buy）
+        used_sell = 0
+        ranges: List[tuple] = []
+        for b in buy_ix:
+            s = None
+            while used_sell < len(sell_ix):
+                if sell_ix[used_sell] > b:
+                    s = sell_ix[used_sell]
+                    used_sell += 1
+                    break
+                # 不合法（sell 早于当前 buy），跳过
+                used_sell += 1
+            ranges.append((b, s))
+
+        # 快速数组填充：对每根 snapshot，检查其 bar_index 是否落在任一区间内
+        # 区间语义：[b, s]（含端点）—— buy 当日和卖出当日都算持仓（保持与回测口径一致）
+        for i, snap in enumerate(snapshots):
+            bar_idx = snap.bar_index
+            for b, s in ranges:
+                if bar_idx < b:
+                    continue
+                if s is None:
+                    # 未卖出的持仓，延续到底
+                    y[i] = 1.0
+                    break
+                if bar_idx <= s:
+                    y[i] = 1.0
+                    break
+
+        return y
 
     def _compute_hold_days_waveform(
         self,
@@ -471,25 +535,33 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
             sell_indices = []
             if buy_dates or sell_dates:
                 # 将日期字符串转为 bar 索引
+                # 建立多种格式的索引映射，支持日线和分钟线
                 date_to_idx = {}
                 for i, b in enumerate(bars):
                     dt = b.datetime
-                    if dt.hour == 0 and dt.minute == 0:
-                        key = dt.strftime('%Y-%m-%d')
-                    else:
-                        key = dt.strftime('%Y-%m-%d %H:%M')
-                    date_to_idx[key] = i
-                    # 也存短格式
-                    date_to_idx[dt.strftime('%Y-%m-%d')] = i
+                    # 精确到分钟的key（分钟线用）
+                    key_full = dt.strftime('%Y-%m-%d %H:%M')
+                    date_to_idx[key_full] = i
+                    # 精确到秒（某些datetime带秒）
+                    key_sec = dt.strftime('%Y-%m-%d %H:%M:%S')
+                    date_to_idx[key_sec] = i
+                    # 日期key（日线用，分钟线下同一天多根K线只保留最后一根）
+                    key_date = dt.strftime('%Y-%m-%d')
+                    date_to_idx[key_date] = i
 
                 for d in (buy_dates or []):
-                    d = d.strip()[:10]
+                    d = d.strip()
                     if d in date_to_idx:
                         buy_indices.append(date_to_idx[d])
+                    elif d[:10] in date_to_idx:
+                        # 日期部分匹配（fallback）
+                        buy_indices.append(date_to_idx[d[:10]])
                 for d in (sell_dates or []):
-                    d = d.strip()[:10]
+                    d = d.strip()
                     if d in date_to_idx:
                         sell_indices.append(date_to_idx[d])
+                    elif d[:10] in date_to_idx:
+                        sell_indices.append(date_to_idx[d[:10]])
 
             # 先配置 MA 均线（使用 KlineViewTab 的工具栏配置）
             try:

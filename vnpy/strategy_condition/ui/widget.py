@@ -439,6 +439,9 @@ class StrategyConditionWidget(QtWidgets.QWidget):
             print(f"[SCE] Monitor Tab 加载失败: {e}")
             self._monitor_tab = None
 
+        # 切换到 Monitor Tab 时，自动用 K线图当前 symbol 刷新
+        self._tab.currentChanged.connect(self._on_tab_changed)
+
         v.addWidget(self._tab, 1)
 
         # 底部按钮行
@@ -597,7 +600,7 @@ class StrategyConditionWidget(QtWidgets.QWidget):
 
         v.addWidget(_lbl("最大持仓天数", _MUT, 12))
         self._hold_sp = QtWidgets.QSpinBox()
-        self._hold_sp.setRange(1, 120); self._hold_sp.setValue(60)
+        self._hold_sp.setRange(1, 99999); self._hold_sp.setValue(120)
         self._hold_sp.setStyleSheet(_SPIN_SS)
         v.addWidget(self._hold_sp)
 
@@ -813,8 +816,69 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         try:
             # 加载该股票的 K 线数据
             n_bars = self._nbars_sp.value()
-            bars_dict = self._load_bars([symbol], n_bars)
-            bars = bars_dict.get(symbol, [])
+            # 优先复用 Chart Tab 已加载的原始 bars（避免周期不匹配）
+            # self._kline_tab 在 show_symbol() 中会存一份原始 BarData 列表
+            chart_raw_bars = getattr(self._kline_tab, '_last_raw_bars', None)
+            # 按周期动态确定 Monitor 截断上限：
+            # - 1分钟K线：8000根 ≈ 5.5 个交易日，覆盖一周行情
+            # - 日线：5000根 ≈ 20 年（A 股全部历史）
+            # - 其他（小时/周等）：4000根
+            # 截断目的：避免 generate_snapshots 的 O(N²) 卡死主线程
+            if chart_raw_bars and len(chart_raw_bars) >= 2:
+                # 用前两根 bar 间隔推断周期（无需改 kline_view.py）
+                dt0 = getattr(chart_raw_bars[0], "datetime", None)
+                dt1 = getattr(chart_raw_bars[1], "datetime", None)
+                inferred_interval = None
+                if dt0 is not None and dt1 is not None:
+                    delta_sec = abs((dt1 - dt0).total_seconds())
+                    if delta_sec <= 120:        # <= 2分钟 → 1分钟线
+                        inferred_interval = "1m"
+                        MONITOR_MAX_BARS = 8000
+                    elif delta_sec <= 3600 * 2: # <= 2小时 → 小时线
+                        inferred_interval = "1h"
+                        MONITOR_MAX_BARS = 4000
+                    else:                       # 日线及以上
+                        inferred_interval = "1d+"
+                        MONITOR_MAX_BARS = 5000
+                else:
+                    MONITOR_MAX_BARS = 5000
+                    inferred_interval = "unknown"
+            else:
+                # 兜底：日线假设
+                MONITOR_MAX_BARS = 5000
+                inferred_interval = "fallback"
+            orig_n_bars = n_bars
+            if n_bars <= 0 or n_bars > MONITOR_MAX_BARS:
+                n_bars = MONITOR_MAX_BARS
+                print(
+                    f"[SCE] Monitor 按周期{inferred_interval}自动截取最近 {MONITOR_MAX_BARS} 根 "
+                    f"(原 n_bars={orig_n_bars})",
+                    flush=True,
+                )
+            if chart_raw_bars and len(chart_raw_bars) > 0:
+                # 取最近 MONITOR_MAX_BARS 根，避免 O(N²) 性能问题
+                if len(chart_raw_bars) > MONITOR_MAX_BARS:
+                    chart_raw_bars = chart_raw_bars[-MONITOR_MAX_BARS:]
+                    print(
+                        f"[SCE] Monitor 从 Chart Tab 截取最近 {MONITOR_MAX_BARS} 根",
+                        flush=True,
+                    )
+                # 原始 BarData 只有 close_price/open_price，需包一层 _BarAdapter
+                # 让 Monitor 能访问 .close/.open/.high/.low/.volume/.dt
+                bars = [_BarAdapter(b) for b in chart_raw_bars]
+                print(
+                    f"[SCE] Monitor 复用 Chart Tab 已加载的 {len(bars)} 根 K 线",
+                    flush=True,
+                )
+            else:
+                bars_dict = self._load_bars([symbol], n_bars)
+                bars = bars_dict.get(symbol, [])
+                if bars and len(bars) > MONITOR_MAX_BARS:
+                    bars = bars[-MONITOR_MAX_BARS:]
+                    print(
+                        f"[SCE] Monitor 二次截取到 {len(bars)} 根",
+                        flush=True,
+                    )
             
             if not bars:
                 print(f"[SCE] _feed_monitor: no bars loaded for {symbol}")
@@ -825,12 +889,27 @@ class StrategyConditionWidget(QtWidgets.QWidget):
             from ..engine.condition_engine import ConditionEngine
             ce = ConditionEngine()
             monitor_eng = ConditionMonitorEngine(ce)
+            # 根据 K 线数量动态调整 warmup：避免在小样本下生成 0 个 snapshot
+            # （默认 warmup=60，如果 bars<60 根则 range(60, n) 为空）
+            if len(bars) >= 200:
+                monitor_warmup = 60
+            elif len(bars) >= 100:
+                monitor_warmup = 30
+            else:
+                monitor_warmup = min(10, max(1, len(bars) // 4))
             snapshots = monitor_eng.generate_snapshots(
                 symbol=symbol,
                 bars=bars,
                 strategy=self._strategy,
+                warmup=monitor_warmup,
+                buy_dates=buy_dates or [],
+                sell_dates=sell_dates or [],
             )
-            print(f"[SCE] _feed_monitor: generated {len(snapshots)} snapshots")
+            print(
+                f"[SCE] _feed_monitor: generated {len(snapshots)} snapshots "
+                f"(warmup={monitor_warmup})",
+                flush=True,
+            )
             
             self._monitor_tab.load_snapshots(
                 symbol, snapshots,
@@ -843,6 +922,20 @@ class StrategyConditionWidget(QtWidgets.QWidget):
             import traceback
             print(f"[SCE] Monitor 快照生成失败: {e}")
             traceback.print_exc()
+
+    def _on_tab_changed(self, idx: int) -> None:
+        """切换到 Monitor Tab 时，自动用 K线图当前 symbol 刷新快照"""
+        if self._monitor_tab is None:
+            return
+        monitor_idx = self._tab.indexOf(self._monitor_tab)
+        if idx != monitor_idx:
+            return
+        symbol = getattr(self._kline_tab, "_current_symbol", "")
+        if not symbol:
+            return
+        buy_dates  = getattr(self._kline_tab, "_last_buy_dates",  [])
+        sell_dates = getattr(self._kline_tab, "_last_sell_dates", [])
+        self._feed_monitor(symbol, buy_dates=buy_dates, sell_dates=sell_dates)
 
     def _on_signal_selected(self, rec) -> None:
         """
@@ -1224,7 +1317,12 @@ class StrategyConditionWidget(QtWidgets.QWidget):
             ce = self._engine.condition_engine if self._engine else ConditionEngine()
             se = ScanEngine(ce)
             warmup = max(60, self._strategy.params.min_bars)
-            batch  = se.backtest(loaded, self._strategy, bars_dict, warmup=warmup)
+            # 判断是否为分钟级K线（非日线即为日内，需启用T+1规则）
+            bt_idx = self._interval_cb.currentIndex()
+            bt_interval, _ = self._interval_options[bt_idx]
+            is_intraday = (bt_interval != Interval.DAILY)
+            batch  = se.backtest(loaded, self._strategy, bars_dict,
+                                 warmup=warmup, is_intraday=is_intraday)
             self._bt_view.load_batch(batch)
             self._signal_view.load_batch(batch)
             self._tab.setCurrentIndex(3)

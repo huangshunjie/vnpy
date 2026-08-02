@@ -154,3 +154,81 @@ class SignalSource(Enum):
     SCAN     = "scan"
     BACKTEST = "backtest"
     REALTIME = "realtime"
+
+
+# ── 条件的周期适用性标记 ──────────────────────────────────────
+# "all"    = 所有周期均适用（计算不依赖特定周期语义）
+# "daily"  = 仅适用于日线及以上周期（语义绑定"日"的概念）
+# "minute" = 仅适用于分钟级周期（如日内时间过滤）
+INDICATOR_INTERVAL_SCOPE = {
+    #── 全周期通用（数学计算不依赖特定周期语义）──
+    ConditionIndicator.MA_SLOPE:           "all",      # MA斜率：任何周期均可计算
+    ConditionIndicator.MA_ALIGNMENT:       "all",      # 均线排列：周期无关
+    ConditionIndicator.TREND_STRENGTH:     "all",
+    ConditionIndicator.PRICE_ABOVE_MA:     "all",
+    ConditionIndicator.TREND_INTACT:       "all",
+    ConditionIndicator.MA_BINDONG:         "all",      # 均线粘合
+    ConditionIndicator.TREND_SCORE:        "all",
+    ConditionIndicator.MACD_GOLDEN:        "all",      # MACD金叉
+    ConditionIndicator.MACD_DEATH:         "all",      # MACD死叉
+    ConditionIndicator.RSI_RANGE:          "all",      # RSI
+    ConditionIndicator.VOLUME_RATIO:       "all",      # 量比
+    ConditionIndicator.VOLUME_PRICE_UP:    "all",      # 放量上涨
+    ConditionIndicator.VOLUME_SHRINK:      "all",      # 缩量
+    ConditionIndicator.VOLUME_UP_PHASE:    "all",
+    ConditionIndicator.VOLUME_LAYER:       "all",
+    ConditionIndicator.VOLUME_YIN_FILTER:  "all",
+    ConditionIndicator.FUND_INTENSITY:     "all",
+    ConditionIndicator.PULLBACK_PCT:       "all",      # 跌幅回调
+    ConditionIndicator.PULLBACK_FROM_HIGH: "all",      # 从高点回撤
+    ConditionIndicator.PULLBACK_TO_MA:     "all",      # 回踩均线
+    ConditionIndicator.PULLBACK_TO_MA5:    "all",
+    ConditionIndicator.PULLBACK_TO_MA10:   "all",
+    ConditionIndicator.PULLBACK_TO_MA20:   "all",
+    ConditionIndicator.PULLBACK_TO_MA30:   "all",
+    ConditionIndicator.FIRST_PULLBACK:     "all",
+    ConditionIndicator.SHRINK_PULLBACK:    "all",
+    ConditionIndicator.STRONG_PULLBACK_SCORE: "all",
+    ConditionIndicator.DEV_MA5:            "all",      # 乖离率
+    ConditionIndicator.DEV_MA10:           "all",
+    ConditionIndicator.DEV_MA20:           "all",
+    ConditionIndicator.DEV_MA10_MA20:      "all",
+    ConditionIndicator.DEV_OVERBOUGHT:     "all",
+    ConditionIndicator.ATR_RATIO:          "all",      # ATR
+    ConditionIndicator.BOLL_WIDTH:         "all",      # 布林带
+    ConditionIndicator.KLINE_YIN:          "all",      # 单根K线形态
+    ConditionIndicator.KLINE_YANG:         "all",
+    ConditionIndicator.KLINE_SHRINK_YIN:   "all",
+    ConditionIndicator.KLINE_VOL_YIN:      "all",
+    ConditionIndicator.KLINE_LONG_LOWER:   "all",
+    ConditionIndicator.KLINE_DOJI:         "all",
+    ConditionIndicator.KLINE_BIG_YANG:     "all",
+    ConditionIndicator.CONTINUOUS_RISE:    "all",
+    ConditionIndicator.STOP_LOSS:          "all",      # 止损
+    ConditionIndicator.TAKE_PROFIT:        "all",      # 止盈
+    ConditionIndicator.TRAILING_STOP:      "all",      # 追踪止盈
+    ConditionIndicator.MA_BREAK_DOWN:      "all",      # 跌破均线
+    ConditionIndicator.MACD_DEATH_SELL:    "all",
+    ConditionIndicator.SCORE_NODE:         "all",      # 综合评分
+    ConditionIndicator.MARKET_INDEX_TREND: "all",
+    ConditionIndicator.MARKET_RISK:        "all",
+
+    # ── 仅日线适用（语义绑定"日"的概念）──
+    ConditionIndicator.WEEKLY_MA_SLOPE:    "daily",    # 需要周线数据
+    ConditionIndicator.NEW_HIGH_N:         "daily",    # "N日新高"
+    ConditionIndicator.TREND_DAYS:         "daily",    # "趋势持续天数"
+    ConditionIndicator.RETURN_N_DAYS:      "daily",    # "N日收益率"
+    ConditionIndicator.LIMIT_UP_COUNT:     "daily",    # 涨停（日涨跌幅概念）
+    ConditionIndicator.BIG_YANG_COUNT:     "daily",    # 大阳线次数
+    ConditionIndicator.KLINE_STRENGTH:     "daily",    # K线综合强度（含涨停判定）
+    ConditionIndicator.KLINE_LIMIT_UP:     "daily",    # 涨停K线
+    ConditionIndicator.STRENGTH_RETURN_N:  "daily",    # N日涨幅
+    ConditionIndicator.STRENGTH_LIMIT_UP_COUNT: "daily",
+    ConditionIndicator.STRENGTH_BIG_YANG_COUNT: "daily",
+    ConditionIndicator.STRENGTH_VOL_BREAK: "daily",    # 放量突破（含新高判定）
+    ConditionIndicator.STRENGTH_SCORE:     "daily",    # 强势股评分（含涨停）
+    ConditionIndicator.MAX_HOLD_DAYS:      "daily",    # 持仓天数
+
+    # ── 仅分钟线适用 ──
+    ConditionIndicator.TIME_OF_DAY:        "minute",   # 日内时间过滤
+}

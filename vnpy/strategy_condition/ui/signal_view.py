@@ -75,12 +75,15 @@ class _NumericItem(QtWidgets.QTableWidgetItem):
         left_data = self.data(QtCore.Qt.ItemDataRole.UserRole)
         right_data = other.data(QtCore.Qt.ItemDataRole.UserRole)
 
-        # 如果两个都有数值，按数值比较
+        # 如果两侧都有数值，做数值比较
         if left_data is not None and right_data is not None:
-            return float(left_data) < float(right_data)
+            try:
+                return float(left_data) < float(right_data)
+            except (TypeError, ValueError):
+                pass
 
-        # 否则默认文本比较
-        return super().__lt__(other)
+        # 退回文本比较（避免调用 super().__lt__ 引发 PyQt 递归）
+        return (self.text() or "") < (other.text() or "")
 
 
 class _SortableTable(QtWidgets.QTableWidget):

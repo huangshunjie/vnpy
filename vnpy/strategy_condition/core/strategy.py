@@ -63,7 +63,7 @@ class StrategyParams:
     take_profit_pct: float = 15.0     # 止盈触发（%）
     trail_drawdown:  float = 10.0     # 追踪止盈回撤（%）
     min_bars:        int   = 60       # 最少K线数（过滤新股）
-    cooldown_days:   int   = 3        # 卖出后冷却期（交易日）
+    cooldown_days:   int   = 3        # 卖出后冷却期（K线根数）
     commission_rate: float = 0.0003   # 手续费率
     stamp_duty_rate: float = 0.001    # 印花税率
     slippage_rate:   float = 0.0002   # 滑点
