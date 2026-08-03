@@ -35,15 +35,29 @@ class ConditionEngine:
     def set_factor_engine(self, fe)  -> None: self._factor = fe
 
     def eval_condition(self, cond: Condition,
-                       symbol: str, bars: list) -> Tuple[bool, float]:
-        """评估买入条件树叶节点，返回 (passed, score)。"""
+                       symbol: str, bars: list,
+                       _precomputed: dict = None) -> Tuple[bool, float]:
+        """
+        评估买入条件树叶节点，返回 (passed, score)。
+
+        _precomputed: 可选预计算数组字典，格式：
+            {"closes": np_array, "highs": np_array,
+             "lows": np_array, "volumes": np_array}
+            传入时跳过 list comprehension，直接使用（性能优化）。
+        """
         if not cond.enabled or not bars:
             return (True, 1.0) if not cond.enabled else (False, 0.0)
         p = cond.params
-        closes  = [b.close  for b in bars]
-        highs   = [b.high   for b in bars]
-        lows    = [b.low    for b in bars]
-        volumes = [float(b.volume) for b in bars]
+        if _precomputed:
+            closes = _precomputed["closes"]
+            highs = _precomputed["highs"]
+            lows = _precomputed["lows"]
+            volumes = _precomputed["volumes"]
+        else:
+            closes  = [b.close  for b in bars]
+            highs   = [b.high   for b in bars]
+            lows    = [b.low    for b in bars]
+            volumes = [float(b.volume) for b in bars]
         try:
             return self._dispatch(cond.indicator, p, symbol,
                                   closes, highs, lows, volumes, bars)
@@ -204,7 +218,8 @@ class ConditionEngine:
         """
         if not bars:
             return False, 0.0
-        dt = getattr(bars[-1], "dt", None)
+        # BarData 的属性名是 datetime（不是 dt）
+        dt = getattr(bars[-1], "datetime", None) or getattr(bars[-1], "dt", None)
         if dt is None:
             return False, 0.0
         # 日线：小时和分钟都为0，无日内时间概念
@@ -261,8 +276,11 @@ class ConditionEngine:
             default_tr = sp.trail_drawdown  if sp is not None else 10.0
             tp_thr = float(p.get("take_profit",  default_tp))
             tr_thr = float(p.get("trail_drawdown", default_tr))
-            if ret < tp_thr: return False, 0.0
+            # 正确语义：用 peak_ret（峰值收益率）判断是否曾达到止盈阈值
+            # 而非 ret（当前收益率），否则价格回撤后 ret < tp_thr 永远不触发
             if peak_price <= 0: return False, 0.0
+            peak_ret = (peak_price - entry_price) / entry_price * 100
+            if peak_ret < tp_thr: return False, 0.0
             dd = (peak_price - current_price) / peak_price * 100
             ok = dd >= tr_thr; return ok, 1.0 if ok else 0.0
         if ind == CI.MAX_HOLD_DAYS:
@@ -279,4 +297,7 @@ class ConditionEngine:
             if not bars: return False, 0.0
             return check_macd_death([b.close for b in bars], int(p.get("fast", 12)),
                                     int(p.get("slow", 26)), int(p.get("signal", 9)))
+        # ── 时间过滤（不依赖持仓上下文，直接判断K线时间） ──────────────
+        if ind == CI.TIME_OF_DAY:
+            return self._check_time_of_day(p, bars)
         return False, 0.0

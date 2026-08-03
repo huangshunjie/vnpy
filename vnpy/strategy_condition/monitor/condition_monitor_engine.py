@@ -22,6 +22,15 @@ from ..core.condition_tree import ConditionNode
 from ..core.strategy import Strategy
 from ..engine.condition_engine import ConditionEngine
 from .condition_snapshot import ConditionDetail, ConditionSnapshot, StateChangeEvent
+from .sell_signal_lifecycle import (
+    ConditionLayerResult,
+    DecisionCheck,
+    DecisionLayerResult,
+    ExecutionLayerResult,
+    SellSignalLifecycle,
+    SignalLayerResult,
+)
+from ..constant import DecisionResult, RejectReason
 
 
 # 纯技术面卖出条件（不依赖真实持仓上下文）：
@@ -40,6 +49,7 @@ _PURE_TECHNICAL_EXIT_INDICATORS = {
     ConditionIndicator.MACD_DEATH_SELL,
     ConditionIndicator.TRAILING_STOP,
     ConditionIndicator.STOP_LOSS,
+    ConditionIndicator.TIME_OF_DAY,      # 时间过滤：纯K线时间戳判断，不依赖持仓
 }
 
 
@@ -64,6 +74,8 @@ class ConditionMonitorEngine:
         self._cache: Dict[str, List[ConditionSnapshot]] = {}
         # 状态变化事件缓存: {symbol: [StateChangeEvent, ...]}
         self._changes_cache: Dict[str, List[StateChangeEvent]] = {}
+        # 最近一次内部模拟产生的卖出日期（供调用方同步 K线标记）
+        self.last_simulated_sell_dates: List[str] = []
 
     # ── 公开接口 ──────────────────────────────────────────────────────
 
@@ -94,9 +106,28 @@ class ConditionMonitorEngine:
         n = len(bars)
         start = max(warmup, 1)
 
+        # 检查是否有"未配对"的买入（没有对应的后续卖出）
+        # 对未配对的买入进行内部模拟卖出，保证"一买对应一卖"
+        effective_sell_dates = list(sell_dates or [])
+        self.last_simulated_sell_dates = []
+        if buy_dates:
+            unmatched_buys = self._find_unmatched_buys(
+                bars, buy_dates, effective_sell_dates)
+            if unmatched_buys:
+                simulated = self._simulate_sell_dates(
+                    symbol, bars, strategy, unmatched_buys, warmup)
+                if simulated:
+                    effective_sell_dates.extend(simulated)
+                    self.last_simulated_sell_dates = simulated
+                    self._log(
+                        f"[MonitorEngine] {symbol}: "
+                        f"{len(unmatched_buys)} 个未配对买入, "
+                        f"内部模拟产生 {len(simulated)} 个卖出点"
+                    )
+
         # 构建持仓状态跟踪器
         position_tracker = self._build_position_tracker(
-            bars, buy_dates or [], sell_dates or [])
+            bars, buy_dates or [], effective_sell_dates)
 
         for i in range(start, n):
             bars_slice = bars[:i + 1]
@@ -403,6 +434,146 @@ class ConditionMonitorEngine:
             self._cache.clear()
             self._changes_cache.clear()
 
+    # ── 内部模拟卖出 ─────────────────────────────────────────────────
+
+    def _find_unmatched_buys(
+        self,
+        bars: list,
+        buy_dates: List[str],
+        sell_dates: List[str],
+    ) -> List[str]:
+        """
+        找出没有对应后续卖出的买入日期。
+
+        逻辑：按时间排序后，每个 buy 尝试匹配第一个在它之后的 sell。
+        未被匹配到的 buy 即为"未配对买入"。
+        """
+        buy_indices: List[Tuple[int, str]] = []
+        sell_indices: List[int] = []
+
+        for dt_str in buy_dates:
+            idx = self._find_bar_index_by_dt_str(bars, dt_str)
+            if idx is not None:
+                buy_indices.append((idx, dt_str))
+
+        for dt_str in sell_dates:
+            idx = self._find_bar_index_by_dt_str(bars, dt_str)
+            if idx is not None:
+                sell_indices.append(idx)
+
+        buy_indices.sort(key=lambda x: x[0])
+        sell_indices.sort()
+
+        # 贪心配对：每个 buy 找第一个 > buy_idx 的 sell
+        used_sells = set()
+        unmatched: List[str] = []
+
+        for buy_idx, buy_dt_str in buy_indices:
+            matched = False
+            for si in sell_indices:
+                if si > buy_idx and si not in used_sells:
+                    used_sells.add(si)
+                    matched = True
+                    break
+            if not matched:
+                unmatched.append(buy_dt_str)
+
+        return unmatched
+
+    def _simulate_sell_dates(
+        self,
+        symbol: str,
+        bars: list,
+        strategy: Strategy,
+        buy_dates: List[str],
+        warmup: int,
+    ) -> List[str]:
+        """
+        当外部未提供 sell_dates 时，内部逐 bar 模拟卖出。
+        每个买入点后，顺序评估 sell_tree，第一次 sell=True 即为卖出点。
+        保证"一买一卖"配对。
+        """
+        n = len(bars)
+        simulated_sells: List[str] = []
+
+        # 找到所有 buy bar indices
+        buy_indices: List[int] = []
+        for dt_str in buy_dates:
+            idx = self._find_bar_index_by_dt_str(bars, dt_str)
+            if idx is not None:
+                buy_indices.append(idx)
+        buy_indices.sort()
+
+        for buy_idx in buy_indices:
+            entry_price = bars[buy_idx].close
+            peak_price = entry_price
+            buy_bar_dt = getattr(bars[buy_idx], "dt", None)
+            buy_trade_date = buy_bar_dt.date() if buy_bar_dt else None
+
+            sold = False
+            # 从 buy_idx+1 开始评估（当天不可卖，T+1）
+            for j in range(buy_idx + 1, n):
+                cur_bar = bars[j]
+                cur_price = cur_bar.close
+                if cur_price > peak_price:
+                    peak_price = cur_price
+
+                # T+1 检查
+                cur_bar_dt = getattr(cur_bar, "dt", None)
+                cur_trade_date = cur_bar_dt.date() if cur_bar_dt else None
+                if (buy_trade_date and cur_trade_date
+                        and cur_trade_date == buy_trade_date):
+                    continue  # 买入当天不可卖
+
+                hold_bars = j - buy_idx
+                bars_slice = bars[:j + 1]
+
+                # 使用 eval_exit 评估卖出条件
+                sell_eval_fn = self._make_simple_exit_eval_fn(
+                    bars_slice, entry_price, cur_price, peak_price,
+                    hold_bars, strategy.params)
+
+                sell_passed, _ = strategy.sell_tree.evaluate(
+                    symbol, bars_slice, sell_eval_fn)
+
+                if sell_passed:
+                    # 记录卖出时间
+                    dt = getattr(cur_bar, "dt", None)
+                    if dt:
+                        if dt.hour == 0 and dt.minute == 0:
+                            sell_str = dt.strftime("%Y-%m-%d")
+                        else:
+                            sell_str = dt.strftime("%Y-%m-%d %H:%M")
+                        simulated_sells.append(sell_str)
+                    sold = True
+                    break
+
+            # 如果卖了，后续 buy 不能在 sell 之前（按时间序已排序，直接跳过）
+
+        return simulated_sells
+
+    def _make_simple_exit_eval_fn(
+        self,
+        bars_slice: list,
+        entry_price: float,
+        cur_price: float,
+        peak_price: float,
+        hold_bars: int,
+        sp=None,
+    ) -> Callable[[Condition, str, list], Tuple[bool, float]]:
+        """
+        简化的卖出评估函数（不记录详情，仅判断 pass/fail）。
+        
+        注意：与 Monitor 波形显示不同，模拟卖出拥有精确的持仓上下文
+        （entry_price, peak_price, hold_bars），所以所有卖出条件
+        统一走 eval_exit，使用真实持仓数据判断，不走近似。
+        """
+        def eval_fn(cond: Condition, symbol: str, bars: list) -> Tuple[bool, float]:
+            # 模拟卖出时所有退出条件统一用 eval_exit（有精确持仓上下文）
+            return self._ce.eval_exit(
+                cond, entry_price, cur_price, peak_price, hold_bars, bars, sp)
+        return eval_fn
+
     # ── 内部实现 ──────────────────────────────────────────────────────
 
     def _evaluate_bar(
@@ -462,8 +633,35 @@ class ConditionMonitorEngine:
         signal_type: Optional[str] = None
         if buy_passed:
             signal_type = "BUY"
-        elif sell_passed:
+        elif sell_passed and pos_ctx is not None and not pos_ctx.get("t1_protected", False):
+            # 卖出信号仅在同时满足三个条件时才成立：
+            #   1. sell_tree 评估通过 (sell_passed=True)
+            #   2. 当前在持仓段内 (pos_ctx is not None)
+            #   3. 已过 A 股 T+1 保护期 (not t1_protected)
             signal_type = "SELL"
+
+        # ── 构建 Sell Signal Lifecycle 诊断 ──────────────────────
+        sell_lifecycles = self._build_sell_lifecycles(
+            symbol=symbol,
+            bar_index=bar_index,
+            dt=dt,
+            price=price,
+            sell_details=sell_details,
+            pos_ctx=pos_ctx,
+            buy_passed=buy_passed,
+        )
+        # 聚合摘要
+        sell_signal_created = any(lc.signal.signal_created for lc in sell_lifecycles)
+        sell_decision_result: Optional[str] = None
+        sell_reject_reason: Optional[str] = None
+        if sell_signal_created:
+            # 取第一个有信号的 lifecycle 的 decision
+            for lc in sell_lifecycles:
+                if lc.signal.signal_created:
+                    sell_decision_result = lc.decision.result.value
+                    if lc.decision.result == DecisionResult.REJECTED:
+                        sell_reject_reason = lc.decision.reject_description
+                    break
 
         return ConditionSnapshot(
             dt=dt,
@@ -481,6 +679,10 @@ class ConditionMonitorEngine:
             sell_result=sell_passed,
             sell_score=sell_score,
             signal_type=signal_type,
+            sell_lifecycles=sell_lifecycles,
+            sell_signal_created=sell_signal_created,
+            sell_decision_result=sell_decision_result,
+            sell_reject_reason=sell_reject_reason,
         )
 
     def _make_recording_eval_fn(
@@ -693,27 +895,22 @@ class ConditionMonitorEngine:
         """
         创建带持仓上下文的卖出条件评估代理。
 
-        分派规则：
-          - 纯技术面卖出条件（MA_BREAK_DOWN / MACD_DEATH_SELL）：
-              独立走 eval_condition，只看K线本身，
-              不使用 entry_price / peak_price / hold_bars。
-          - 依赖持仓上下文的卖出条件（STOP_LOSS / TAKE_PROFIT /
-              TRAILING_STOP / MAX_HOLD_DAYS）：
-              走 eval_exit，需要完整持仓上下文才有意义。
+        关键原则（参数统一）：
+          持仓段内，ALL 卖出条件统一走 eval_exit，使用真实的
+          entry_price / peak_price / hold_bars，与回测引擎逻辑完全一致。
+          这确保 Monitor 波形和回测结果的触发时机严格对齐。
+
+          "纯技术面近似"（eval_condition）仅在无持仓时使用
+          （见 _make_recording_no_position_fn），用于展示波形趋势。
         """
         def recording_exit_eval(cond: Condition, symbol: str, bars: list) -> Tuple[bool, float]:
-            if cond.indicator in _PURE_TECHNICAL_EXIT_INDICATORS:
-                # 纯技术面：与是否持仓无关
-                passed, score = self._ce.eval_condition(cond, symbol, bars)
-                current_value = self._extract_current_value(cond, bars_slice)
-            else:
-                # 持仓依赖：走 eval_exit
-                passed, score = self._ce.eval_exit(
-                    cond, entry_price, cur_price, peak_price, hold_bars, bars, sp)
-                # 对持仓依赖类卖出条件，展示收益率更有意义
-                current_value = round(
-                    (cur_price - entry_price) / entry_price * 100, 2
-                ) if entry_price > 0 else 0.0
+            # 持仓段内：所有卖出条件统一走 eval_exit（与回测一致）
+            passed, score = self._ce.eval_exit(
+                cond, entry_price, cur_price, peak_price, hold_bars, bars, sp)
+            # 展示当前收益率（比裸价格更有诊断意义）
+            current_value = round(
+                (cur_price - entry_price) / entry_price * 100, 2
+            ) if entry_price > 0 else 0.0
 
             threshold_desc = self._format_threshold(cond)
             detail = ConditionDetail(
@@ -764,3 +961,125 @@ class ConditionMonitorEngine:
             return passed, score
 
         return no_position_eval
+
+    # ── Sell Signal Lifecycle 构建 ────────────────────────────────────
+
+    def _build_sell_lifecycles(
+        self,
+        symbol: str,
+        bar_index: int,
+        dt: datetime,
+        price: float,
+        sell_details: List[ConditionDetail],
+        pos_ctx: Optional[Dict[str, Any]],
+        buy_passed: bool,
+    ) -> List[SellSignalLifecycle]:
+        """
+        根据卖出条件评估结果和持仓上下文，构建每个卖出条件的完整生命周期。
+
+        生命周期流转：
+          1. Condition: 条件是否满足（从 sell_details 获取）
+          2. Signal: 条件满足 + 有持仓 → 产生信号
+          3. Decision: T+1 / 冷却期 / 冲突 检查
+          4. Execution: 由外部回填（此处不处理）
+        """
+        lifecycles: List[SellSignalLifecycle] = []
+
+        has_position = pos_ctx is not None
+        entry_price = pos_ctx["entry_price"] if pos_ctx else 0.0
+        peak_price = pos_ctx["peak_price"] if pos_ctx else 0.0
+        hold_bars = pos_ctx["hold_bars"] if pos_ctx else 0
+        t1_protected = pos_ctx.get("t1_protected", False) if pos_ctx else False
+
+        for detail in sell_details:
+            # ── Layer 1: Condition ──
+            cond_layer = ConditionLayerResult(
+                condition_name=detail.condition_name,
+                indicator=detail.indicator,
+                triggered=detail.passed,
+                score=detail.score,
+                trigger_time=dt if detail.passed else None,
+                context={
+                    "current_value": detail.current_value,
+                    "threshold": detail.threshold_desc,
+                    "params": detail.params,
+                    "entry_price": round(entry_price, 4) if has_position else None,
+                    "peak_price": round(peak_price, 4) if has_position else None,
+                    "current_price": round(price, 4),
+                    "hold_bars": hold_bars if has_position else None,
+                },
+            )
+
+            # ── Layer 2: Signal ──
+            signal_layer = SignalLayerResult()
+            if detail.passed and has_position:
+                signal_layer.signal_created = True
+                signal_layer.signal_source = detail.condition_name
+                signal_layer.signal_time = dt
+
+            # ── Layer 3: Decision ──
+            decision_layer = DecisionLayerResult()
+            if signal_layer.signal_created:
+                checks: List[DecisionCheck] = []
+
+                # Check 1: T+1 保护
+                t1_check = DecisionCheck(
+                    check_name="T+1保护",
+                    passed=not t1_protected,
+                    description="买入当日不可卖出" if t1_protected else "已过T+1保护期",
+                )
+                checks.append(t1_check)
+
+                # Check 2: 买卖冲突
+                conflict_check = DecisionCheck(
+                    check_name="买卖冲突",
+                    passed=not buy_passed,
+                    description="买卖信号同时触发，跳过卖出" if buy_passed else "无冲突",
+                )
+                checks.append(conflict_check)
+
+                # Check 3: 持仓确认（冗余确认，正常流程下 has_position 已保证）
+                position_check = DecisionCheck(
+                    check_name="持仓确认",
+                    passed=True,
+                    description=f"持仓中，入场价{entry_price:.2f}",
+                )
+                checks.append(position_check)
+
+                decision_layer.checks = checks
+
+                # 判定最终结果
+                if not t1_check.passed:
+                    decision_layer.result = DecisionResult.REJECTED
+                    decision_layer.reject_reason = RejectReason.T1_LOCK
+                    decision_layer.reject_description = "T+1当日锁定，无法卖出"
+                elif not conflict_check.passed:
+                    decision_layer.result = DecisionResult.REJECTED
+                    decision_layer.reject_reason = RejectReason.CONFLICT
+                    decision_layer.reject_description = "买卖信号冲突，优先跳过卖出"
+                else:
+                    decision_layer.result = DecisionResult.APPROVED
+                    decision_layer.reject_reason = RejectReason.NONE
+                    decision_layer.reject_description = ""
+
+            # ── Layer 4: Execution（由外部回填） ──
+            execution_layer = ExecutionLayerResult()
+
+            # ── 组装 Lifecycle ──
+            lc = SellSignalLifecycle(
+                symbol=symbol,
+                bar_index=bar_index,
+                dt=dt,
+                has_position=has_position,
+                entry_price=entry_price,
+                entry_time=None,  # 可从 pos_ctx 扩展
+                peak_price=peak_price,
+                hold_bars=hold_bars,
+                condition=cond_layer,
+                signal=signal_layer,
+                decision=decision_layer,
+                execution=execution_layer,
+            )
+            lifecycles.append(lc)
+
+        return lifecycles

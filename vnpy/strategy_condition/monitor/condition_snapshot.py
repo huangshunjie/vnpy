@@ -11,7 +11,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .sell_signal_lifecycle import SellSignalLifecycle
 
 
 @dataclass
@@ -106,6 +109,12 @@ class ConditionSnapshot:
 
     signal_type: Optional[str] = None  # "BUY" / "SELL" / None
 
+    # ── Sell Signal Lifecycle 诊断（Phase 3 新增） ──────────────
+    sell_lifecycles: List[Any] = field(default_factory=list)  # List[SellSignalLifecycle]
+    sell_signal_created: bool = False       # 是否有任何条件产生了卖出信号
+    sell_decision_result: Optional[str] = None   # "APPROVED" / "REJECTED" / None
+    sell_reject_reason: Optional[str] = None     # 拒绝原因描述
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "dt": str(self.dt)[:19],
@@ -123,6 +132,10 @@ class ConditionSnapshot:
             "sell_result": self.sell_result,
             "sell_score": round(self.sell_score, 4),
             "signal_type": self.signal_type,
+            "sell_lifecycles": [lc.to_dict() for lc in self.sell_lifecycles],
+            "sell_signal_created": self.sell_signal_created,
+            "sell_decision_result": self.sell_decision_result,
+            "sell_reject_reason": self.sell_reject_reason,
         }
 
     @classmethod

@@ -269,6 +269,22 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         self._engine       = main_engine.get_engine("StrategyCondition")
         self._strategy: Optional[Strategy] = None
         self._last_bars_dict: dict = {}  # 保存最近一次加载的K线数据
+
+        # ── 性能缓存 ────────────────────────────────────────────────────
+        # 第一层：K 线数据缓存 {(symbol, interval, n_bars): [bar, ...]}
+        self._bars_cache: dict = {}
+        self._bars_cache_key: tuple = ()  # 当前缓存的 key
+
+        # 第二层：快照缓存 {(symbol, strategy_hash): (snapshots, buy_dates, sell_dates)}
+        self._snapshot_cache: dict = {}
+        self._snapshot_cache_key: tuple = ()
+
+        # 第三层：Monitor 异步计算线程
+        self._monitor_worker: Optional[QtCore.QThread] = None
+
+        # dirty 标记：策略变更时置 True，下次切换到 Monitor 时重新计算
+        self._monitor_dirty: bool = True
+
         self._init_ui()
         self._load_builtin_templates()
 
@@ -291,14 +307,28 @@ class StrategyConditionWidget(QtWidgets.QWidget):
             "QSplitter::handle{background:#313244;}"
             "QSplitter::handle:hover{background:#89b4fa;}"
         )
-        splitter.addWidget(self._build_left())
+        self._left_panel = self._build_left()
+        self._right_panel = self._build_right()
+        splitter.addWidget(self._left_panel)
         splitter.addWidget(self._build_mid())
-        splitter.addWidget(self._build_right())
+        splitter.addWidget(self._right_panel)
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 5)
         splitter.setStretchFactor(2, 3)
         splitter.setSizes([240, 760, 380])
+        # 允许折叠左栏和右栏（拖到边缘可完全隐藏）
+        splitter.setCollapsible(0, True)
+        splitter.setCollapsible(1, False)
+        splitter.setCollapsible(2, True)
+        self._splitter = splitter
         root.addWidget(splitter)
+
+        # ── 快捷键：切换条件库/参数面板 ──────────────────────────────
+        from vnpy.trader.ui import QtGui as _qg
+        sc_left = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+L"), self)
+        sc_left.activated.connect(self._toggle_left_panel)
+        sc_right = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+R"), self)
+        sc_right.activated.connect(self._toggle_right_panel)
 
     # ── 左栏：条件库 ──────────────────────────────────────────────────
 
@@ -382,9 +412,37 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         v.setContentsMargins(16, 14, 16, 14)
         v.setSpacing(8)
 
-        # 标题行：策略选择 + 操作按钮
+        # 标题行：策略选择 + 面板显示控制 + 操作按钮
         title_row = QtWidgets.QHBoxLayout()
         title_row.addWidget(_lbl("策略  Strategy", _YLW, 15, True))
+        
+        # 面板显示控制复选框
+        title_row.addSpacing(20)
+        self._show_left_cb = QtWidgets.QCheckBox("条件库")
+        self._show_left_cb.setChecked(True)
+        self._show_left_cb.setStyleSheet(
+            f"QCheckBox{{color:{_FG};font-size:12px;background:transparent;}}"
+            f"QCheckBox::indicator{{width:14px;height:14px;"
+            f"border:1px solid {_BORD};border-radius:3px;background:{_PAN2};}}"
+            f"QCheckBox::indicator:checked{{background:{_BLU};"
+            f"border-color:{_BLU};}}"
+        )
+        self._show_left_cb.stateChanged.connect(self._on_left_cb_changed)
+        title_row.addWidget(self._show_left_cb)
+        
+        title_row.addSpacing(12)
+        self._show_right_cb = QtWidgets.QCheckBox("参数面板")
+        self._show_right_cb.setChecked(True)
+        self._show_right_cb.setStyleSheet(
+            f"QCheckBox{{color:{_FG};font-size:12px;background:transparent;}}"
+            f"QCheckBox::indicator{{width:14px;height:14px;"
+            f"border:1px solid {_BORD};border-radius:3px;background:{_PAN2};}}"
+            f"QCheckBox::indicator:checked{{background:{_BLU};"
+            f"border-color:{_BLU};}}"
+        )
+        self._show_right_cb.stateChanged.connect(self._on_right_cb_changed)
+        title_row.addWidget(self._show_right_cb)
+        
         title_row.addStretch()
         self._strategy_cb = QtWidgets.QComboBox()
         self._strategy_cb.setStyleSheet(_COMBO_SS)
@@ -434,6 +492,8 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         try:
             from .condition_monitor_widget import ConditionMonitorWidget
             self._monitor_tab = ConditionMonitorWidget()
+            self._monitor_tab.lifecycle_info_changed.connect(
+                self._on_lifecycle_info)
             self._tab.addTab(self._monitor_tab, "🔍  条件监控  Monitor")
         except Exception as e:
             print(f"[SCE] Monitor Tab 加载失败: {e}")
@@ -462,7 +522,14 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         for b in (self._btn_scan, self._btn_bt, self._btn_save,
                   self._btn_new, self._btn_rename, self._btn_del):
             btn_row.addWidget(b)
-        btn_row.addStretch()
+
+        # 诊断信息标签（两行小字，显示在删除策略右侧）
+        self._lifecycle_lbl = QtWidgets.QLabel("")
+        self._lifecycle_lbl.setStyleSheet(
+            f"color:{_MUT};font-size:11px;background:transparent;"
+            f"border:none;padding:0 12px;")
+        self._lifecycle_lbl.setWordWrap(False)
+        btn_row.addWidget(self._lifecycle_lbl, 1)
         v.addLayout(btn_row)
         return w
 
@@ -485,83 +552,95 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         v.setContentsMargins(14, 14, 14, 14)
         v.setSpacing(8)
 
-        # ── 策略名称 ────────────────────────────────────────────────────
+        # ── 标题和策略名称 ────────────────────────────────────────────
         v.addWidget(_lbl("参数设置  Parameters", _YLW, 15, True))
         v.addWidget(_hline())
         v.addWidget(_lbl("策略名称", _MUT, 12))
         self._name_edit = QtWidgets.QLineEdit("新策略")
         self._name_edit.setStyleSheet(_EDIT_SS)
         v.addWidget(self._name_edit)
-
-        # ── 股票池 ──────────────────────────────────────────────────────
         v.addWidget(_hline())
+
+        # ── 两列布局容器 ──────────────────────────────────
+        two_col = QtWidgets.QHBoxLayout()
+        two_col.setSpacing(12)
+
+        # ══════════════════════════════════
+        # 左列：股票池 + K线设置 + 时间范围
+        # ══════════════════════════════════════════════════════════════
+        left_col = QtWidgets.QVBoxLayout()
+        left_col.setSpacing(6)
+
+        # ── 股票池 ──
         pool_hdr = QtWidgets.QHBoxLayout()
         pool_hdr.addWidget(_lbl("股票池  Universe", _YLW, 13, True))
         pool_hdr.addStretch()
         self._pool_count_lbl = _lbl("0 只", _MUT, 11)
         pool_hdr.addWidget(self._pool_count_lbl)
-        v.addLayout(pool_hdr)
+        left_col.addLayout(pool_hdr)
 
-        # 预设池快选
-        v.addWidget(_lbl("快速预设", _MUT, 11))
-        preset_row = QtWidgets.QHBoxLayout()
-        preset_row.setSpacing(4)
-        for label, symbols in [
+        # 预设池快选（改为2x2布局更紧凑）
+        left_col.addWidget(_lbl("快速预设", _MUT, 11))
+        preset_grid = QtWidgets.QGridLayout()
+        preset_grid.setSpacing(4)
+        preset_btns = [
             ("沪深300", _POOL_CSI300),
             ("中证500", _POOL_CSI500),
             ("科创板",  _POOL_STAR),
             ("自定义",  []),
-        ]:
+        ]
+        for idx, (label, symbols) in enumerate(preset_btns):
             b = QtWidgets.QPushButton(label)
             b.setStyleSheet(
                 f"QPushButton{{background:{_PAN2};color:{_FG};"
                 f"border:1px solid {_BORD};border-radius:4px;"
-                f"padding:4px 8px;font-size:11px;}}"
+                f"padding:4px 6px;font-size:11px;}}"
                 f"QPushButton:hover{{border-color:{_BLU};color:{_BLU};}}"
             )
             pool = list(symbols)
             b.clicked.connect(lambda checked, s=pool: self._set_pool(s))
-            preset_row.addWidget(b)
-        v.addLayout(preset_row)
+            preset_grid.addWidget(b, idx // 2, idx % 2)
+        left_col.addLayout(preset_grid)
 
         # 手动输入框
-        v.addWidget(_lbl("手动输入（逗号或换行分隔，格式：000001.SZSE）", _MUT, 11))
+        left_col.addWidget(_lbl("手动输入（逗号或换行分隔）", _MUT, 11))
         self._pool_edit = QtWidgets.QPlainTextEdit()
-        self._pool_edit.setMinimumHeight(90)
-        self._pool_edit.setMaximumHeight(140)
+        self._pool_edit.setMinimumHeight(70)
+        self._pool_edit.setMaximumHeight(100)
         self._pool_edit.setPlaceholderText(
-            "例：\n000001.SZSE\n600519.SSE\n300750.SZSE")
+            "例：\n000001.SZSE\n600519.SSE")
         self._pool_edit.setStyleSheet(
             f"QPlainTextEdit{{background:{_PAN2};color:{_FG};"
             f"border:1px solid {_BORD};border-radius:4px;"
-            f"font-size:12px;padding:6px;"
+            f"font-size:11px;padding:4px;"
             f"font-family:Consolas,Courier New,monospace;}}"
         )
         self._pool_edit.textChanged.connect(self._on_pool_changed)
-        v.addWidget(self._pool_edit)
+        left_col.addWidget(self._pool_edit)
 
         # 数据源说明
         self._data_src_lbl = _lbl(
-            "数据源：VeighNa 数据库（需先通过数据管理器下载）", _MUT, 11)
+            "数据源：VeighNa 数据库", _MUT, 10)
         self._data_src_lbl.setWordWrap(True)
-        v.addWidget(self._data_src_lbl)
+        left_col.addWidget(self._data_src_lbl)
 
-        # K线数量
-        v.addWidget(_lbl("每只股票加载K线数", _MUT, 12))
+        left_col.addSpacing(4)
+        left_col.addWidget(_hline())
+
+        # ── K线设置 ──
+        left_col.addWidget(_lbl("K线数量", _MUT, 12))
         self._nbars_sp = QtWidgets.QSpinBox()
         self._nbars_sp.setRange(0, 10000); self._nbars_sp.setValue(300)
         self._nbars_sp.setSingleStep(50); self._nbars_sp.setStyleSheet(_SPIN_SS)
+        left_col.addWidget(self._nbars_sp)
         # 显示预估起始日期
-        self._nbars_start_lbl = _lbl("", _MUT, 11)
+        self._nbars_start_lbl = _lbl("", _MUT, 10)
         self._nbars_start_lbl.setStyleSheet("color: #888888;")
-        v.addWidget(self._nbars_start_lbl)
-        v.addWidget(self._nbars_sp)
+        left_col.addWidget(self._nbars_start_lbl)
 
-        # K线周期
-        v.addWidget(_lbl("K线周期", _MUT, 12))
+        left_col.addWidget(_lbl("K线周期", _MUT, 12))
         self._interval_cb = QtWidgets.QComboBox()
         self._interval_cb.setStyleSheet(_COMBO_SS)
-        # 选项文字 -> (Interval, 显示名称)
         self._interval_options = [
             (Interval.DAILY,    "日线"),
             (Interval.MINUTE,   "1分钟"),
@@ -572,79 +651,96 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         ]
         for _, name in self._interval_options:
             self._interval_cb.addItem(name)
-        # 默认选择日线
         self._interval_cb.setCurrentIndex(0)
-        v.addWidget(self._interval_cb)
+        left_col.addWidget(self._interval_cb)
         
-        # 更新预估起始日期 - 需要放在_interval_cb创建之后
+        # 更新预估起始日期
         def update_estimate_start():
             self._update_estimated_start_date()
         self._nbars_sp.valueChanged.connect(update_estimate_start)
         self._interval_cb.currentIndexChanged.connect(update_estimate_start)
 
-        # ── 时间范围 ─────────────────────────────────────────────────
-        v.addWidget(_hline())
-        v.addWidget(_lbl("回测时间范围", _YLW, 13, True))
-        v.addWidget(_lbl("起始日期", _MUT, 12))
+        left_col.addSpacing(4)
+        left_col.addWidget(_hline())
+
+        # ── 时间范围 ──
+        left_col.addWidget(_lbl("回测时间范围", _YLW, 12, True))
+        left_col.addWidget(_lbl("起始日期", _MUT, 11))
         self._date_start = QtWidgets.QLineEdit("2020-01-01")
         self._date_start.setStyleSheet(_EDIT_SS)
-        v.addWidget(self._date_start)
-        v.addWidget(_lbl("截止日期", _MUT, 12))
+        left_col.addWidget(self._date_start)
+        left_col.addWidget(_lbl("截止日期", _MUT, 11))
         self._date_end = QtWidgets.QLineEdit("今日")
         self._date_end.setStyleSheet(_EDIT_SS)
-        v.addWidget(self._date_end)
+        left_col.addWidget(self._date_end)
 
-        # ── 卖出参数 ─────────────────────────────────────────────────
-        v.addWidget(_hline())
-        v.addWidget(_lbl("卖出参数", _YLW, 13, True))
+        left_col.addStretch()
 
-        v.addWidget(_lbl("最大持仓天数", _MUT, 12))
+        # ══════════════════════════════════
+        # 右列：卖出参数 + 交易成本
+        # ══════════════════════════════════════════════════════════════
+        right_col = QtWidgets.QVBoxLayout()
+        right_col.setSpacing(6)
+
+        # ── 卖出参数 ──
+        right_col.addWidget(_lbl("卖出参数", _YLW, 12, True))
+
+        right_col.addWidget(_lbl("最大持仓天数", _MUT, 11))
         self._hold_sp = QtWidgets.QSpinBox()
         self._hold_sp.setRange(1, 99999); self._hold_sp.setValue(120)
         self._hold_sp.setStyleSheet(_SPIN_SS)
-        v.addWidget(self._hold_sp)
+        right_col.addWidget(self._hold_sp)
 
-        v.addWidget(_lbl("卖出后冷却期（交易日）", _MUT, 12))
+        right_col.addWidget(_lbl("冷却期（交易日）", _MUT, 11))
         self._cooldown_sp = QtWidgets.QSpinBox()
         self._cooldown_sp.setRange(0, 30); self._cooldown_sp.setValue(3)
         self._cooldown_sp.setStyleSheet(_SPIN_SS)
-        v.addWidget(self._cooldown_sp)
+        right_col.addWidget(self._cooldown_sp)
 
-        v.addWidget(_lbl("止损触发 (%)", _MUT, 12))
+        right_col.addWidget(_lbl("止损触发 (%)", _MUT, 11))
         self._sl_sp = QtWidgets.QDoubleSpinBox()
         self._sl_sp.setRange(0.0, 50.0); self._sl_sp.setValue(8.0)
         self._sl_sp.setSingleStep(0.5); self._sl_sp.setStyleSheet(_SPIN_SS)
-        v.addWidget(self._sl_sp)
+        right_col.addWidget(self._sl_sp)
 
-        v.addWidget(_lbl("止盈触发 (%)", _MUT, 12))
+        right_col.addWidget(_lbl("止盈触发 (%)", _MUT, 11))
         self._tp_sp = QtWidgets.QDoubleSpinBox()
         self._tp_sp.setRange(0.0, 200.0); self._tp_sp.setValue(15.0)
         self._tp_sp.setSingleStep(1.0); self._tp_sp.setStyleSheet(_SPIN_SS)
-        v.addWidget(self._tp_sp)
+        right_col.addWidget(self._tp_sp)
 
-        v.addWidget(_lbl("追踪止盈回撤 (%)", _MUT, 12))
+        right_col.addWidget(_lbl("追踪止盈回撤 (%)", _MUT, 11))
         self._trail_sp = QtWidgets.QDoubleSpinBox()
         self._trail_sp.setRange(0.0, 50.0); self._trail_sp.setValue(10.0)
         self._trail_sp.setSingleStep(1.0); self._trail_sp.setStyleSheet(_SPIN_SS)
-        v.addWidget(self._trail_sp)
+        right_col.addWidget(self._trail_sp)
 
-        # ── 交易成本 ─────────────────────────────────────────────────
-        v.addWidget(_hline())
-        v.addWidget(_lbl("交易成本", _YLW, 13, True))
+        right_col.addSpacing(4)
+        right_col.addWidget(_hline())
 
-        v.addWidget(_lbl("手续费率 (万)", _MUT, 12))
+        # ── 交易成本 ──
+        right_col.addWidget(_lbl("交易成本", _YLW, 12, True))
+
+        right_col.addWidget(_lbl("手续费率 (万)", _MUT, 11))
         self._comm_sp = QtWidgets.QDoubleSpinBox()
         self._comm_sp.setRange(0.0, 20.0); self._comm_sp.setValue(3.0)
         self._comm_sp.setSingleStep(0.5); self._comm_sp.setDecimals(1)
         self._comm_sp.setStyleSheet(_SPIN_SS)
-        v.addWidget(self._comm_sp)
+        right_col.addWidget(self._comm_sp)
 
-        v.addWidget(_lbl("印花税率 (千)", _MUT, 12))
+        right_col.addWidget(_lbl("印花税率 (千)", _MUT, 11))
         self._stamp_sp = QtWidgets.QDoubleSpinBox()
         self._stamp_sp.setRange(0.0, 20.0); self._stamp_sp.setValue(1.0)
         self._stamp_sp.setSingleStep(0.5); self._stamp_sp.setDecimals(1)
         self._stamp_sp.setStyleSheet(_SPIN_SS)
-        v.addWidget(self._stamp_sp)
+        right_col.addWidget(self._stamp_sp)
+
+        right_col.addStretch()
+
+        # 组装两列
+        two_col.addLayout(left_col, 1)
+        two_col.addLayout(right_col, 1)
+        v.addLayout(two_col, 1)
 
         # ── 策略描述 ─────────────────────────────────────────────────
         v.addWidget(_hline())
@@ -793,138 +889,138 @@ class StrategyConditionWidget(QtWidgets.QWidget):
             f"  最大持仓 {sp.max_hold_days} 天"
         )
 
+    # ── 缓存辅助 ──────────────────────────────────────────────────────
+
+    def _strategy_hash(self) -> str:
+        """策略的指纹哈希（买卖树结构 + params），用于快照缓存 key"""
+        import hashlib, json
+        if not self._strategy:
+            return ""
+        # 用 JSON 序列化策略的核心数据作为指纹
+        try:
+            payload = self._strategy.to_json()
+        except Exception:
+            payload = repr(self._strategy.params) + repr(self._strategy.buy_tree)
+        return hashlib.md5(payload.encode()).hexdigest()[:12]
+
+    def _invalidate_caches(self, bars: bool = True, snapshots: bool = True) -> None:
+        """清除缓存。bars=True 清 K 线缓存，snapshots=True 清快照缓存"""
+        if bars:
+            self._bars_cache.clear()
+            self._bars_cache_key = ()
+        if snapshots:
+            self._snapshot_cache.clear()
+            self._snapshot_cache_key = ()
+        self._monitor_dirty = True
+
     def _feed_monitor(self, symbol: str,
                       buy_dates: list = None,
                       sell_dates: list = None) -> None:
         """
         为指定股票生成条件监控快照并加载到 Monitor Tab。
-        自动加载 K 线数据，无需外部传入。
-
-        Args:
-            symbol: 股票代码
-            buy_dates: 回测/选股产生的买入信号日期列表（与 Chart tab 一致）
-            sell_dates: 回测/选股产生的卖出信号日期列表（与 Chart tab 一致）
+        内置两层缓存：
+          1. 如果 (symbol, strategy_hash, buy_dates, sell_dates) 命中缓存，
+             直接从缓存加载渲染，0 延迟。
+          2. 否则执行完整计算，结果存入缓存。
         """
-        print(f"[SCE] _feed_monitor called for {symbol}")
         if self._monitor_tab is None:
-            print("[SCE] _feed_monitor: monitor_tab is None")
             return
         if not self._strategy:
-            print("[SCE] _feed_monitor: strategy is None")
             return
-        
+
+        # ── 缓存 key ──
+        buy_dates = buy_dates or []
+        sell_dates = sell_dates or []
+        cache_key = (
+            symbol,
+            self._strategy_hash(),
+            tuple(buy_dates),
+            tuple(sell_dates),
+        )
+
+        # ── 缓存命中：直接渲染 ──
+        cached = self._snapshot_cache.get(cache_key)
+        if cached is not None:
+            snapshots, bars = cached
+            print(
+                f"[SCE] Monitor 缓存命中 {symbol} "
+                f"({len(snapshots)} snapshots, {len(bars)} bars)",
+                flush=True,
+            )
+            self._monitor_tab.load_snapshots(
+                symbol, snapshots,
+                bars=bars,
+                buy_dates=buy_dates,
+                sell_dates=sell_dates,
+            )
+            self._monitor_dirty = False
+            return
+
+        # ── 缓存未命中：计算快照 ──
+        print(f"[SCE] _feed_monitor: computing for {symbol}", flush=True)
         try:
-            # 加载该股票的 K 线数据
             n_bars = self._nbars_sp.value()
-            # 优先复用 Chart Tab 已加载的原始 bars（避免周期不匹配）
-            # self._kline_tab 在 show_symbol() 中会存一份原始 BarData 列表
+
+            # 优先复用 Chart Tab 已加载的原始 bars
             chart_raw_bars = getattr(self._kline_tab, '_last_raw_bars', None)
-            # 按周期动态确定 Monitor 截断上限：
-            # - 1分钟K线：8000根 ≈ 5.5 个交易日，覆盖一周行情
-            # - 日线：5000根 ≈ 20 年（A 股全部历史）
-            # - 其他（小时/周等）：4000根
-            # 截断目的：避免 generate_snapshots 的 O(N²) 卡死主线程
-            if chart_raw_bars and len(chart_raw_bars) >= 2:
-                # 用前两根 bar 间隔推断周期（无需改 kline_view.py）
-                dt0 = getattr(chart_raw_bars[0], "datetime", None)
-                dt1 = getattr(chart_raw_bars[1], "datetime", None)
-                inferred_interval = None
-                if dt0 is not None and dt1 is not None:
-                    delta_sec = abs((dt1 - dt0).total_seconds())
-                    if delta_sec <= 120:        # <= 2分钟 → 1分钟线
-                        inferred_interval = "1m"
-                        MONITOR_MAX_BARS = 8000
-                    elif delta_sec <= 3600 * 2: # <= 2小时 → 小时线
-                        inferred_interval = "1h"
-                        MONITOR_MAX_BARS = 4000
-                    else:                       # 日线及以上
-                        inferred_interval = "1d+"
-                        MONITOR_MAX_BARS = 5000
-                else:
-                    MONITOR_MAX_BARS = 5000
-                    inferred_interval = "unknown"
-            else:
-                # 兜底：日线假设
-                MONITOR_MAX_BARS = 5000
-                inferred_interval = "fallback"
-            orig_n_bars = n_bars
-            if n_bars <= 0 or n_bars > MONITOR_MAX_BARS:
-                n_bars = MONITOR_MAX_BARS
-                print(
-                    f"[SCE] Monitor 按周期{inferred_interval}自动截取最近 {MONITOR_MAX_BARS} 根 "
-                    f"(原 n_bars={orig_n_bars})",
-                    flush=True,
-                )
             if chart_raw_bars and len(chart_raw_bars) > 0:
-                # 取最近 MONITOR_MAX_BARS 根，避免 O(N²) 性能问题
-                if len(chart_raw_bars) > MONITOR_MAX_BARS:
-                    chart_raw_bars = chart_raw_bars[-MONITOR_MAX_BARS:]
-                    print(
-                        f"[SCE] Monitor 从 Chart Tab 截取最近 {MONITOR_MAX_BARS} 根",
-                        flush=True,
-                    )
-                # 原始 BarData 只有 close_price/open_price，需包一层 _BarAdapter
-                # 让 Monitor 能访问 .close/.open/.high/.low/.volume/.dt
                 bars = [_BarAdapter(b) for b in chart_raw_bars]
-                print(
-                    f"[SCE] Monitor 复用 Chart Tab 已加载的 {len(bars)} 根 K 线",
-                    flush=True,
-                )
             else:
                 bars_dict = self._load_bars([symbol], n_bars)
                 bars = bars_dict.get(symbol, [])
-                if bars and len(bars) > MONITOR_MAX_BARS:
-                    bars = bars[-MONITOR_MAX_BARS:]
-                    print(
-                        f"[SCE] Monitor 二次截取到 {len(bars)} 根",
-                        flush=True,
-                    )
-            
+
             if not bars:
-                print(f"[SCE] _feed_monitor: no bars loaded for {symbol}")
+                print(f"[SCE] _feed_monitor: no bars for {symbol}")
                 return
-            print(f"[SCE] _feed_monitor: loaded {len(bars)} bars for {symbol}")
-            
+
             from ..monitor.condition_monitor_engine import ConditionMonitorEngine
             from ..engine.condition_engine import ConditionEngine
             ce = ConditionEngine()
             monitor_eng = ConditionMonitorEngine(ce)
-            # 根据 K 线数量动态调整 warmup：避免在小样本下生成 0 个 snapshot
-            # （默认 warmup=60，如果 bars<60 根则 range(60, n) 为空）
+
             if len(bars) >= 200:
                 monitor_warmup = 60
             elif len(bars) >= 100:
                 monitor_warmup = 30
             else:
                 monitor_warmup = min(10, max(1, len(bars) // 4))
+
             snapshots = monitor_eng.generate_snapshots(
                 symbol=symbol,
                 bars=bars,
                 strategy=self._strategy,
                 warmup=monitor_warmup,
-                buy_dates=buy_dates or [],
-                sell_dates=sell_dates or [],
+                buy_dates=buy_dates,
+                sell_dates=sell_dates,
             )
             print(
-                f"[SCE] _feed_monitor: generated {len(snapshots)} snapshots "
+                f"[SCE] _feed_monitor: {len(snapshots)} snapshots "
                 f"(warmup={monitor_warmup})",
                 flush=True,
             )
-            
+
+            # 回测结果的卖出日期是权威来源
+            effective_sell_dates = sell_dates
+
+            # ── 存入缓存 ──
+            self._snapshot_cache[cache_key] = (snapshots, bars)
+            self._snapshot_cache_key = cache_key
+
             self._monitor_tab.load_snapshots(
                 symbol, snapshots,
                 bars=bars,
-                buy_dates=buy_dates or [],
-                sell_dates=sell_dates or [],
+                buy_dates=buy_dates,
+                sell_dates=effective_sell_dates,
             )
-            print(f"[SCE] _feed_monitor: loaded snapshots to monitor tab")
+            self._monitor_dirty = False
+            print(f"[SCE] _feed_monitor: done, cached", flush=True)
         except Exception as e:
             import traceback
             print(f"[SCE] Monitor 快照生成失败: {e}")
             traceback.print_exc()
 
     def _on_tab_changed(self, idx: int) -> None:
-        """切换到 Monitor Tab 时，自动用 K线图当前 symbol 刷新快照"""
+        """切换到 Monitor Tab 时，使用缓存快速展示"""
         if self._monitor_tab is None:
             return
         monitor_idx = self._tab.indexOf(self._monitor_tab)
@@ -935,6 +1031,7 @@ class StrategyConditionWidget(QtWidgets.QWidget):
             return
         buy_dates  = getattr(self._kline_tab, "_last_buy_dates",  [])
         sell_dates = getattr(self._kline_tab, "_last_sell_dates", [])
+        # _feed_monitor 内部会先查缓存，命中则 0 延迟
         self._feed_monitor(symbol, buy_dates=buy_dates, sell_dates=sell_dates)
 
     def _on_signal_selected(self, rec) -> None:
@@ -1389,8 +1486,11 @@ class StrategyConditionWidget(QtWidgets.QWidget):
                 f"策略 [{name}] 已保存到\n{fp}"
             )
 
-    # ── 工具 ──────────────────────────────────────────────────────────
+    # ── 诊断信息槽 ──────────────────────────────────────────────────────
 
+    def _on_lifecycle_info(self, line1: str, line2: str) -> None:
+        """接收 Monitor 波形区鼠标移动时的诊断信息，显示在底部按钮栏"""
+        self._lifecycle_lbl.setText(f"{line1}\n{line2}")
 
     # ── 股票池辅助 ────────────────────────────────────────────────────
 
@@ -1546,6 +1646,62 @@ class StrategyConditionWidget(QtWidgets.QWidget):
 
     def _show_msg(self, msg: str) -> None:
         QtWidgets.QMessageBox.information(self, "提示", msg)
+
+    # ── 面板显示/隐藏切换 ────────────────────────────────────────────
+
+    def _on_left_cb_changed(self, state: int) -> None:
+        """左侧复选框状态改变（与快捷键联动）"""
+        if state == QtCore.Qt.CheckState.Checked.value:
+            if not self._left_panel.isVisible():
+                self._left_panel.show()
+                sizes = self._splitter.sizes()
+                if sizes[0] == 0:
+                    sizes[0] = 240
+                    self._splitter.setSizes(sizes)
+        else:
+            if self._left_panel.isVisible():
+                self._left_panel.hide()
+
+    def _on_right_cb_changed(self, state: int) -> None:
+        """右侧复选框状态改变（与快捷键联动）"""
+        if state == QtCore.Qt.CheckState.Checked.value:
+            if not self._right_panel.isVisible():
+                self._right_panel.show()
+                sizes = self._splitter.sizes()
+                if sizes[2] == 0:
+                    sizes[2] = 380
+                    self._splitter.setSizes(sizes)
+        else:
+            if self._right_panel.isVisible():
+                self._right_panel.hide()
+
+    def _toggle_left_panel(self) -> None:
+        """切换左侧条件库面板的显示/隐藏（快捷键 Ctrl+L）"""
+        if self._left_panel.isVisible():
+            self._left_panel.hide()
+            self._show_left_cb.setChecked(False)
+        else:
+            self._left_panel.show()
+            self._show_left_cb.setChecked(True)
+            # 恢复合理宽度
+            sizes = self._splitter.sizes()
+            if sizes[0] == 0:
+                sizes[0] = 240
+                self._splitter.setSizes(sizes)
+
+    def _toggle_right_panel(self) -> None:
+        """切换右侧参数面板的显示/隐藏（快捷键 Ctrl+R）"""
+        if self._right_panel.isVisible():
+            self._right_panel.hide()
+            self._show_right_cb.setChecked(False)
+        else:
+            self._right_panel.show()
+            self._show_right_cb.setChecked(True)
+            # 恢复合理宽度
+            sizes = self._splitter.sizes()
+            if sizes[2] == 0:
+                sizes[2] = 380
+                self._splitter.setSizes(sizes)
 
     @staticmethod
     def _bold_font() -> QtGui.QFont:

@@ -407,8 +407,11 @@ class ConditionWaveformView(QtWidgets.QWidget):
 class ConditionMonitorWidget(QtWidgets.QWidget):
     """
     条件监控主 Widget：上方 K 线图（复用 KlineViewTab）+ 下方条件波形图。
-    三区同步：X轴联动 + 十字竖线贯穿 + 滚轮同步缩放。
+    两区同步：X轴联动 + 十字竖线贯穿 + 滚轮同步缩放。
     """
+
+    # 信号：诊断信息更新（两行文本），供外部 widget 显示
+    lifecycle_info_changed = QtCore.Signal(str, str)  # (line1, line2)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -441,7 +444,9 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
         # 高度比例 6:4
         splitter.setStretchFactor(0, 6)
         splitter.setStretchFactor(1, 4)
+        splitter.setSizes([450, 300])
 
+        self._splitter = splitter
         layout.addWidget(splitter, stretch=1)
 
     # ── 三区同步 ──────────────────────────────────────────────────
@@ -467,7 +472,7 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
             pass
 
         def _on_mouse_moved_synced(evt):
-            """同时更新 K线十字线 + 波形竖线"""
+            """同时更新 K线十字线 + 波形竖线 + Lifecycle面板"""
             pos = evt[0]
             if main_plot.sceneBoundingRect().contains(pos):
                 mp = main_plot.vb.mapSceneToView(pos)
@@ -479,6 +484,8 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
                 self._waveform_view.set_vline_pos(x)
                 # 更新 K 线信息栏
                 chart._on_mouse_moved(evt)
+                # 更新右侧 Lifecycle 诊断面板
+                self._update_lifecycle_for_bar(int(round(x)))
             else:
                 self._waveform_view.hide_vlines()
 
@@ -507,6 +514,59 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
                     slot=_make_wave_handler(wp))
 
         self._synced = True
+
+    def _update_lifecycle_for_bar(self, bar_index: int) -> None:
+        """
+        根据光标所在 bar_index，从 snapshot 提取诊断信息，
+        通过 lifecycle_info_changed 信号发送给外部（底部状态栏）。
+        """
+        if not self._current_snapshots:
+            return
+
+        # 查找 bar_index 对应的 snapshot
+        snapshot = None
+        for s in self._current_snapshots:
+            if s.bar_index == bar_index:
+                snapshot = s
+                break
+
+        # 如果精确匹配不到，找最近的
+        if snapshot is None:
+            min_dist = float('inf')
+            for s in self._current_snapshots:
+                dist = abs(s.bar_index - bar_index)
+                if dist < min_dist:
+                    min_dist = dist
+                    snapshot = s
+
+        if snapshot is None:
+            return
+
+        # 构造两行诊断文本
+        sig = getattr(snapshot, 'signal_type', None) or ""
+        dt_str = str(snapshot.dt)[:16] if snapshot.dt else ""
+
+        # 第一行：持仓状态 + 信号类型
+        holding = getattr(snapshot, 'holding', False)
+        hold_bars = getattr(snapshot, 'hold_bars', 0)
+        if holding:
+            status = f"持仓中(第{hold_bars}根)"
+        else:
+            status = "未持仓"
+        line1 = f"[{dt_str}] {status}  信号:{sig or '无'}"
+
+        # 第二行：卖出条件触发摘要
+        fired = []
+        for d in snapshot.sell_details:
+            if d.passed:
+                name = d.condition_name or d.indicator or "?"
+                fired.append(name)
+        if fired:
+            line2 = f"卖出触发: {', '.join(fired)}"
+        else:
+            line2 = "卖出条件均未触发"
+
+        self.lifecycle_info_changed.emit(line1, line2)
 
     # ── 公开接口 ──────────────────────────────────────────────────
 
@@ -601,3 +661,7 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
                 self._setup_sync()
             except Exception as e:
                 print(f"[Monitor] sync setup failed: {e}")
+
+            # 数据加载后，自动显示最后一根 bar 的 Lifecycle 诊断
+            last_bar_idx = snapshots[-1].bar_index
+            self._update_lifecycle_for_bar(last_bar_idx)

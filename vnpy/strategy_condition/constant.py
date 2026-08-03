@@ -145,6 +145,38 @@ class ConditionIndicator(Enum):
     TIME_OF_DAY        = "TIME_OF_DAY"
 
 
+class SellLifecycleStage(Enum):
+    """卖出信号生命周期阶段"""
+    CONDITION  = "CONDITION"   # 条件计算
+    SIGNAL     = "SIGNAL"      # 信号生成
+    DECISION   = "DECISION"    # 交易决策
+    EXECUTION  = "EXECUTION"   # 订单执行
+
+
+class DecisionResult(Enum):
+    """Decision 层判定结果"""
+    PENDING   = "PENDING"      # 待评估
+    APPROVED  = "APPROVED"     # 允许执行
+    REJECTED  = "REJECTED"     # 拒绝执行
+
+
+class RejectReason(Enum):
+    """Decision 拒绝原因"""
+    NONE           = "NONE"
+    T1_LOCK        = "T1_LOCK"           # T+1 当日不可卖
+    COOLDOWN       = "COOLDOWN"          # 冷却期内
+    NO_POSITION    = "NO_POSITION"       # 无持仓
+    CONFLICT       = "CONFLICT"          # 买卖冲突（同bar）
+    NOT_TRADING    = "NOT_TRADING"       # 非交易时间
+    RISK_CONTROL   = "RISK_CONTROL"      # 风控拦截（预留）
+
+
+class TradingMode(Enum):
+    """交易约束模式"""
+    REAL_MARKET    = "REAL_MARKET"       # 真实市场（含T+1）
+    RESEARCH_MODE  = "RESEARCH_MODE"     # 策略研究（无T+1）
+
+
 class SignalType(Enum):
     BUY  = "BUY"
     SELL = "SELL"
