@@ -80,3 +80,27 @@ class ArtifactType(Enum):
 class WorkspaceStatus(Enum):
     ACTIVE   = "active"
     ARCHIVED = "archived"
+
+
+class LogLevel(Enum):
+    """日志级别"""
+    DEBUG    = "debug"
+    INFO     = "info"
+    WARNING  = "warning"
+    ERROR    = "error"
+    CRITICAL = "critical"
+
+
+class LogSource(Enum):
+    """日志来源"""
+    SYSTEM      = "system"
+    EXPERIMENT  = "experiment"
+    DATASET     = "dataset"
+    FEATURE     = "feature"
+    STRATEGY    = "strategy"
+    MODEL       = "model"
+    BACKTEST    = "backtest"
+    PIPELINE    = "pipeline"
+    REPORT      = "report"
+    ARTIFACT    = "artifact"
+    USER        = "user"

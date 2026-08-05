@@ -231,7 +231,9 @@ class ExperimentTab(QWidget):
         ee.register(EVENT_EXPERIMENT_DELETED, self._on_event)
 
     def _on_event(self, event: Event):
-        self._refresh()
+        # 使用定时器延迟刷新，避免阻塞UI
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(10, self._refresh)  # 减少延迟到10ms
 
     def _refresh(self):
         self._all_records = self._engine.list_experiments()
@@ -291,10 +293,14 @@ class ExperimentTab(QWidget):
         dlg = ExperimentCreateDialog(parent=self)
         if dlg.exec() == ExperimentCreateDialog.Accepted:
             self._engine.create_experiment(
-                name=dlg.get_name(), description=dlg.get_description(),
-                tags=dlg.get_tags(), params=dlg.get_params(),
-                created_by=dlg.get_author(), parent_id=dlg.get_parent_id(),
+                name=dlg.get_name(),
+                description=dlg.get_description(),
+                tags=dlg.get_tags(),
+                params=dlg.get_params(),
+                created_by=dlg.get_author(),
+                parent_id=dlg.get_parent_id(),
             )
+            self._refresh()  # 立即刷新显示
 
     def _on_edit(self):
         rec = self._get_selected_record()

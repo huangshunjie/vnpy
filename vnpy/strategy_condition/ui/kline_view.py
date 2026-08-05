@@ -281,6 +281,9 @@ class KlineChartWidget(QtWidgets.QWidget):
             self._main_plot.scene().sigMouseMoved,
             rateLimit=60, slot=self._on_mouse_moved)
 
+        # -- Dynamic Y-axis: auto-update when user scrolls/zooms X axis --
+        self._main_plot.sigXRangeChanged.connect(self._on_x_range_changed)
+
     def set_volume_visible(self, visible: bool) -> None:
         """显示或隐藏成交量区域"""
         self._glw_vol.setVisible(visible)
@@ -408,6 +411,21 @@ class KlineChartWidget(QtWidgets.QWidget):
         vol_item = VolumeItem(self._volumes, closes)
         self._vol_plot.addItem(vol_item)
 
+        # 成交量Y轴：P95百分位截断 + 5% padding
+        vis_vols = self._volumes[max(0, n - 120):n]
+        if vis_vols:
+            vols_pos = [v for v in vis_vols if v > 0]
+            if vols_pos:
+                import numpy as np
+                vols_arr = np.array(vols_pos)
+                vol_p95 = float(np.percentile(vols_arr, 95))
+                vol_max = float(vols_arr.max())
+                vol_ceiling = max(vol_p95, vol_max * 0.6)
+                vol_padding = vol_ceiling * 0.05
+                self._vol_plot.setYRange(0, vol_ceiling + vol_padding, padding=0)
+        self._vol_plot.setMouseEnabled(x=True, y=False)
+        self._vol_plot.enableAutoRange(axis='y', enable=False)
+
         # 重新添加十字线
         self._vline = pg.InfiniteLine(angle=90, pen=pg.mkPen(_MUT, width=1,
                        style=QtCore.Qt.PenStyle.DashLine))
@@ -457,6 +475,54 @@ class KlineChartWidget(QtWidgets.QWidget):
             phi = max(b[1] for b in vis)
             mg  = (phi - plo) * 0.08 or phi * 0.05
             self._main_plot.setYRange(plo - mg, phi + mg, padding=0)
+
+    def set_auto_yaxis(self, enabled: bool) -> None:
+        """开启/关闭Y轴自适应模式。"""
+        self._auto_yaxis = enabled
+        if enabled:
+            # 立即触发一次Y轴更新
+            self._on_x_range_changed()
+        else:
+            # 关闭时恢复Y轴自由拖拽（autoRange）
+            self._main_plot.enableAutoRange(axis='y', enable=True)
+            self._vol_plot.enableAutoRange(axis='y', enable=True)
+
+    def _on_x_range_changed(self, *_args) -> None:
+        """X轴范围变化时动态更新Y轴范围。"""
+        if not getattr(self, "_auto_yaxis", True):
+            return
+        if not self._bars:
+            return
+        n = len(self._bars)
+        xmin, xmax = self._main_plot.viewRange()[0]
+        i_start = max(0, int(xmin))
+        i_end = min(n, int(xmax) + 1)
+        if i_start >= i_end:
+            return
+
+        # K线Y轴：可见区间的 low/high + 5% padding
+        vis_bars = self._bars[i_start:i_end]
+        if vis_bars:
+            price_lo = min(b[2] for b in vis_bars)
+            price_hi = max(b[1] for b in vis_bars)
+            price_range = price_hi - price_lo
+            if price_range <= 0:
+                price_range = price_hi * 0.1 or 1.0
+            padding = price_range * 0.05
+            self._main_plot.setYRange(
+                price_lo - padding, price_hi + padding, padding=0)
+
+        # 成交量Y轴：可见区间的P95百分位 + 5% padding
+        vis_vols = self._volumes[i_start:i_end]
+        if vis_vols:
+            import numpy as np
+            vols_arr = np.array([v for v in vis_vols if v > 0])
+            if len(vols_arr) > 0:
+                vol_p95 = float(np.percentile(vols_arr, 95))
+                vol_max = float(vols_arr.max())
+                vol_ceiling = max(vol_p95, vol_max * 0.6)
+                vol_padding = vol_ceiling * 0.05
+                self._vol_plot.setYRange(0, vol_ceiling + vol_padding, padding=0)
 
     def _on_mouse_moved(self, evt) -> None:
         pos = evt[0]
@@ -684,6 +750,12 @@ class KlineViewTab(QtWidgets.QWidget):
         sep3.setStyleSheet('color:#45475a;')
         tl.addWidget(sep3)
 
+        self._yaxis_chk = QtWidgets.QCheckBox('Y轴自适应')
+        self._yaxis_chk.setChecked(True)
+        self._yaxis_chk.setStyleSheet('color:#94e2d5;font-size:14px;background:transparent;')
+        self._yaxis_chk.stateChanged.connect(self._on_yaxis_toggle)
+        tl.addWidget(self._yaxis_chk)
+
         self._fullscreen_btn = QtWidgets.QPushButton('⛶ 全屏')
         self._fullscreen_btn.setFixedHeight(28)
         self._fullscreen_btn.setStyleSheet(
@@ -895,6 +967,11 @@ class KlineViewTab(QtWidgets.QWidget):
             enabled = self._ma_enabled[i].isChecked() and period > 0
             result.append((period, color, enabled))
         return result
+
+    def _on_yaxis_toggle(self, state: int) -> None:
+        """切换Y轴自适应模式。"""
+        enabled = bool(state)
+        self._chart.set_auto_yaxis(enabled)
 
     def _on_vol_toggle(self, *_) -> None:
         self._chart.set_volume_visible(self._vol_chk.isChecked())

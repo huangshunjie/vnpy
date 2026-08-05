@@ -11,6 +11,7 @@ from .report_registry     import ReportRegistry
 from .pipeline_registry   import PipelineRegistry
 from .artifact_registry   import ArtifactRegistry
 from .workspace_registry  import WorkspaceRegistry
+from .log_registry        import LogRegistry
 
 __all__ = [
     "ExperimentRegistry",
@@ -23,4 +24,5 @@ __all__ = [
     "PipelineRegistry",
     "ArtifactRegistry",
     "WorkspaceRegistry",
+    "LogRegistry",
 ]

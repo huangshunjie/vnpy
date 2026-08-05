@@ -360,7 +360,9 @@ class ModelTab(QWidget):
         ee.register(EVENT_MODEL_DELETED, self._on_event)
 
     def _on_event(self, event: Event):
-        self._refresh()
+        # 使用定时器延迟刷新，避免阻塞UI
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(100, self._refresh)
 
     def _refresh(self):
         self._all_records = self._engine.list_models()

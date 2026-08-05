@@ -55,3 +55,6 @@ EVENT_ARTIFACT_DELETED    = "eResearchArtifactDeleted"
 EVENT_WORKSPACE_SWITCHED  = "eResearchWorkspaceSwitched"
 EVENT_PROJECT_CREATED     = "eResearchProjectCreated"
 EVENT_PROJECT_UPDATED     = "eResearchProjectUpdated"
+
+# Log System
+EVENT_LOG_MESSAGE         = "eResearchLogMessage"

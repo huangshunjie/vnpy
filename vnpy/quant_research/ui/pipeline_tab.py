@@ -364,7 +364,10 @@ class PipelineTab(QWidget):
                    EVENT_PIPELINE_FAILED):
             ee.register(ev, self._on_event)
 
-    def _on_event(self, event: Event): self._refresh()
+    def _on_event(self, event: Event):
+        # 使用定时器延迟刷新，避免阻塞UI
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(100, self._refresh)
 
     def _refresh(self):
         self._all_records = self._engine.list_pipelines()

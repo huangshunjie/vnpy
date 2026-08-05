@@ -253,17 +253,17 @@ class ResearchPlatformWidget(QWidget):
         self._log_tab        = LogTab(self.engine)
 
         tabs = [
-            (self._dashboard_tab,  "📊 Dashboard"),
-            (self._experiment_tab, "🔬 Experiments"),
-            (self._dataset_tab,    "🗄 Datasets"),
-            (self._feature_tab,    "🧩 Features"),
-            (self._strategy_tab,   "📈 Strategies"),
-            (self._model_tab,      "🤖 Models"),
-            (self._backtest_tab,   "⏮ Backtests"),
-            (self._report_tab,     "📄 Reports"),
-            (self._pipeline_tab,   "⚙ Pipelines"),
-            (self._artifact_tab,   "📦 Artifacts"),
-            (self._log_tab,        "📋 Logs"),
+            (self._dashboard_tab,  "📊 仪表板 (Dashboard)"),
+            (self._experiment_tab, "🔬 实验 (Experiments)"),
+            (self._dataset_tab,    "🗄 数据集 (Datasets)"),
+            (self._feature_tab,    "🧩 特征 (Features)"),
+            (self._strategy_tab,   "📈 策略 (Strategies)"),
+            (self._model_tab,      "🤖 模型 (Models)"),
+            (self._backtest_tab,   "⏮ 回测 (Backtests)"),
+            (self._report_tab,     "📄 报告 (Reports)"),
+            (self._pipeline_tab,   "⚙ 流水线 (Pipelines)"),
+            (self._artifact_tab,   "📦 工件 (Artifacts)"),
+            (self._log_tab,        "📋 日志 (Logs)"),
         ]
         for widget, label in tabs:
             self._tabs.addTab(widget, label)

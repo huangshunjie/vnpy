@@ -347,7 +347,9 @@ class StrategyTab(QWidget):
         ee.register(EVENT_STRATEGY_DELETED, self._on_event)
 
     def _on_event(self, event: Event):
-        self._refresh()
+        # 使用定时器延迟刷新，避免阻塞UI
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(10, self._refresh)  # 减少延迟到10ms
 
     def _refresh(self):
         self._all_records = self._engine.list_strategies()

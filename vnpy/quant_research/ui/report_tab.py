@@ -334,7 +334,10 @@ class ReportTab(QWidget):
         ee = self._engine.event_engine
         ee.register(EVENT_REPORT_CREATED, self._on_event)
         ee.register(EVENT_REPORT_UPDATED, self._on_event)
-    def _on_event(self, event: Event): self._refresh()
+    def _on_event(self, event: Event):
+        # 使用定时器延迟刷新，避免阻塞UI
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(100, self._refresh)
     def _refresh(self):
         self._all_records = self._engine.list_reports()
         self._apply_filter()
