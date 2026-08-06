@@ -436,6 +436,7 @@ class FeatureTab(QWidget):
                 tags=dlg.get_tags(), dependencies=dlg.get_dependencies(),
                 dataset_ids=dlg.get_dataset_ids(),
             )
+            self._refresh()
 
     def _on_edit(self):
         rec = self._get_selected_record()
@@ -454,11 +455,13 @@ class FeatureTab(QWidget):
             rec.dependencies = dlg.get_dependencies()
             rec.dataset_ids  = dlg.get_dataset_ids()
             self._engine.update_feature(rec)
+            self._refresh()
 
     def _on_delete(self):
         rec = self._get_selected_record()
         if rec:
             self._engine.delete_feature(rec.feature_id)
+            self._refresh()
 
     def _on_ic(self):
         rec = self._get_selected_record()

@@ -317,16 +317,19 @@ class ExperimentTab(QWidget):
             rec.created_by = dlg.get_author()
             rec.parent_id = dlg.get_parent_id()
             self._engine.update_experiment(rec)
+            self._refresh()
 
     def _on_delete(self):
         rec = self._get_selected_record()
         if rec:
             self._engine.delete_experiment(rec.experiment_id)
+            self._refresh()
 
     def _on_star(self):
         rec = self._get_selected_record()
         if rec:
             self._engine.star_experiment(rec.experiment_id, not rec.starred)
+            self._refresh()
 
     def _on_compare(self):
         records = self._get_selected_records()

@@ -389,6 +389,7 @@ class ReportTab(QWidget):
                 model_ids=dlg.get_model_ids(),
                 tags=dlg.get_tags(),
             )
+            self._refresh()
     def _on_edit(self):
         rec = self._get_selected_record()
         if not rec: return
@@ -407,15 +408,27 @@ class ReportTab(QWidget):
             rec.model_ids     = dlg.get_model_ids()
             rec.tags          = dlg.get_tags()
             self._engine.update_report(rec)
+            self._refresh()
     def _on_delete(self):
         rec = self._get_selected_record()
         if rec: self._engine.delete_report(rec.report_id)
     def _on_publish(self):
         rec = self._get_selected_record()
-        if rec: self._engine.publish_report(rec.report_id)
+        if rec:
+            self._engine.publish_report(rec.report_id)
+            self._refresh()
+            # 刷新详情面板
+            updated = self._engine.get_report(rec.report_id)
+            if updated:
+                self._detail.load(updated)
     def _on_unpublish(self):
         rec = self._get_selected_record()
-        if rec: self._engine.unpublish_report(rec.report_id)
+        if rec:
+            self._engine.unpublish_report(rec.report_id)
+            self._refresh()
+            updated = self._engine.get_report(rec.report_id)
+            if updated:
+                self._detail.load(updated)
     def _on_add_section(self):
         rec = self._get_selected_record()
         if not rec: return
@@ -423,6 +436,11 @@ class ReportTab(QWidget):
         title, ok = QInputDialog.getText(self, '添加章节', '章节标题：')
         if ok and title.strip():
             self._engine.add_report_section(rec.report_id, title.strip())
+            # 重新加载详情面板以显示新章节
+            updated = self._engine.get_report(rec.report_id)
+            if updated:
+                self._detail.load(updated)
+                self._detail.setCurrentIndex(2)  # 切换到"章节"tab
     def _get_record_at(self, row):
         item = self._table.item(row, COL_ID)
         if item is None: return None

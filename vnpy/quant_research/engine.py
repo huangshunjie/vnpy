@@ -28,6 +28,8 @@ from .event import (
     EVENT_BACKTEST_CREATED,
     EVENT_BACKTEST_UPDATED,
     EVENT_BACKTEST_DELETED,
+    EVENT_REPORT_CREATED,
+    EVENT_REPORT_UPDATED,
 )
 from .model.experiment_model import ExperimentRecord
 from .model.dataset_model import DatasetRecord, DatasetSnapshot
@@ -53,7 +55,15 @@ from .registry import (
 )
 
 # 导入JSON持久化版本
-from .registry_json import ExperimentRegistryJSON, DatasetRegistryJSON
+from .registry_json import (
+    ExperimentRegistryJSON,
+    DatasetRegistryJSON,
+    FeatureRegistryJSON,
+    StrategyRegistryJSON,
+    ModelRegistryJSON,
+    BacktestRegistryJSON,
+    ReportRegistryJSON,
+)
 class ResearchEngine(BaseEngine):
     """研究平台主引擎。"""
     engine_name: str = "ResearchEngine"
@@ -61,11 +71,11 @@ class ResearchEngine(BaseEngine):
         super().__init__(main_engine, event_engine, APP_NAME)
         self.experiment_registry = ExperimentRegistryJSON()  # JSON持久化
         self.dataset_registry    = DatasetRegistryJSON()     # JSON持久化
-        self.feature_registry    = FeatureRegistry()
-        self.strategy_registry   = StrategyRegistry()
-        self.model_registry      = ModelRegistry()
-        self.backtest_registry   = BacktestRegistry()
-        self.report_registry     = ReportRegistry()
+        self.feature_registry    = FeatureRegistryJSON()     # JSON持久化
+        self.strategy_registry   = StrategyRegistryJSON()    # JSON持久化
+        self.model_registry      = ModelRegistryJSON()       # JSON持久化
+        self.backtest_registry   = BacktestRegistryJSON()    # JSON持久化
+        self.report_registry     = ReportRegistryJSON()   # JSON持久化
         self.pipeline_registry   = PipelineRegistry()
         self.artifact_registry   = ArtifactRegistry()
         self.workspace_registry  = WorkspaceRegistry()
@@ -81,14 +91,14 @@ class ResearchEngine(BaseEngine):
         pass
     def close(self) -> None:
         # JSON持久化的Registry不应该清空数据
-        # 只清空内存版本的Registry
         # self.experiment_registry.clear()  # JSON持久化，不清空
         # self.dataset_registry.clear()     # JSON持久化，不清空
-        self.feature_registry.clear()
-        self.strategy_registry.clear()
-        self.model_registry.clear()
-        self.backtest_registry.clear()
-        self.report_registry.clear()
+        # self.feature_registry.clear()     # JSON持久化，不清空
+        # self.strategy_registry.clear()    # JSON持久化，不清空
+        # self.model_registry.clear()       # JSON持久化，不清空
+        # self.backtest_registry.clear()    # JSON持久化，不清空
+        # 只清空内存版本的Registry
+        # self.report_registry.clear()  # JSON持久化，不清空
         self.pipeline_registry.clear()
         self.artifact_registry.clear()
         self.workspace_registry.clear()
@@ -97,9 +107,13 @@ class ResearchEngine(BaseEngine):
     # ------------------------------------------------------------------
     def _gen_experiment_id(self) -> str:
         date_str = datetime.now().strftime("%Y%m%d")
-        count = self._exp_counter.get(date_str, 0) + 1
-        self._exp_counter[date_str] = count
-        return f"EXP-{date_str}-{count:03d}"
+        prefix = f"EXP-{date_str}"
+        existing_ids = {r.experiment_id for r in self.experiment_registry.list_all()
+                       if r.experiment_id.startswith(prefix)}
+        count = len(existing_ids) + 1
+        while f"{prefix}-{count:03d}" in existing_ids:
+            count += 1
+        return f"{prefix}-{count:03d}"
     def create_experiment(
         self,
         name:        str,
@@ -175,6 +189,7 @@ class ResearchEngine(BaseEngine):
             record.updated_at = datetime.now()
             self.experiment_registry.update(record)
             self._put(EVENT_EXPERIMENT_UPDATED, record)
+
     def add_tag(self, experiment_id: str, tag: str) -> None:
         record = self.experiment_registry.get(experiment_id)
         if record and tag not in record.tags:
@@ -193,11 +208,14 @@ class ResearchEngine(BaseEngine):
     # Dataset Registry — Phase 3
     # ------------------------------------------------------------------
     def _gen_dataset_id(self) -> str:
-        from datetime import datetime
         date_str = datetime.now().strftime("%Y%m%d")
-        count = self._exp_counter.get(f"DS-{date_str}", 0) + 1
-        self._exp_counter[f"DS-{date_str}"] = count
-        return f"DS-{date_str}-{count:03d}"
+        prefix = f"DS-{date_str}"
+        existing_ids = {r.dataset_id for r in self.dataset_registry.list_all()
+                       if r.dataset_id.startswith(prefix)}
+        count = len(existing_ids) + 1
+        while f"{prefix}-{count:03d}" in existing_ids:
+            count += 1
+        return f"{prefix}-{count:03d}"
     def register_dataset(
         self,
         name:         str,
@@ -289,10 +307,15 @@ class ResearchEngine(BaseEngine):
     # ------------------------------------------------------------------
     def _gen_feature_id(self) -> str:
         date_str = datetime.now().strftime("%Y%m%d")
-        key = f"FT-{date_str}"
-        count = self._exp_counter.get(key, 0) + 1
-        self._exp_counter[key] = count
-        return f"FT-{date_str}-{count:03d}"
+        prefix = f"FT-{date_str}"
+        # 必须查询已有记录来确定下一个编号，避免ID重复覆盖已有因子
+        existing_ids = {f.feature_id for f in self.feature_registry.list()
+                       if f.feature_id.startswith(prefix)}
+        count = len(existing_ids) + 1
+        # 确保不与已有ID冲突
+        while f"{prefix}-{count:03d}" in existing_ids:
+            count += 1
+        return f"{prefix}-{count:03d}"
     def register_feature(
         self,
         name:         str,
@@ -402,10 +425,13 @@ class ResearchEngine(BaseEngine):
     # ------------------------------------------------------------------
     def _gen_strategy_id(self) -> str:
         date_str = datetime.now().strftime("%Y%m%d")
-        key = f"ST-{date_str}"
-        count = self._exp_counter.get(key, 0) + 1
-        self._exp_counter[key] = count
-        return f"ST-{date_str}-{count:03d}"
+        prefix = f"ST-{date_str}"
+        existing_ids = {r.strategy_id for r in self.strategy_registry.list()
+                       if r.strategy_id.startswith(prefix)}
+        count = len(existing_ids) + 1
+        while f"{prefix}-{count:03d}" in existing_ids:
+            count += 1
+        return f"{prefix}-{count:03d}"
     def register_strategy(
         self,
         name:          str,
@@ -529,10 +555,13 @@ class ResearchEngine(BaseEngine):
     # ------------------------------------------------------------------
     def _gen_model_id(self) -> str:
         date_str = datetime.now().strftime("%Y%m%d")
-        key = f"ML-{date_str}"
-        count = self._exp_counter.get(key, 0) + 1
-        self._exp_counter[key] = count
-        return f"ML-{date_str}-{count:03d}"
+        prefix = f"ML-{date_str}"
+        existing_ids = {r.model_id for r in self.model_registry.list()
+                       if r.model_id.startswith(prefix)}
+        count = len(existing_ids) + 1
+        while f"{prefix}-{count:03d}" in existing_ids:
+            count += 1
+        return f"{prefix}-{count:03d}"
     def register_model(
         self,
         name:        str,
@@ -677,10 +706,13 @@ class ResearchEngine(BaseEngine):
     # ------------------------------------------------------------------
     def _gen_backtest_id(self) -> str:
         date_str = datetime.now().strftime("%Y%m%d")
-        key = f"BT-{date_str}"
-        count = self._exp_counter.get(key, 0) + 1
-        self._exp_counter[key] = count
-        return f"BT-{date_str}-{count:03d}"
+        prefix = f"BT-{date_str}"
+        existing_ids = {r.backtest_id for r in self.backtest_registry.list()
+                       if r.backtest_id.startswith(prefix)}
+        count = len(existing_ids) + 1
+        while f"{prefix}-{count:03d}" in existing_ids:
+            count += 1
+        return f"{prefix}-{count:03d}"
     def submit_backtest(
         self,
         name:            str,

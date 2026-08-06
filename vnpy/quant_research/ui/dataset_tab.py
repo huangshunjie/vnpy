@@ -400,6 +400,7 @@ class DatasetTab(QWidget):
                 row_count=dlg.get_row_count(), size_mb=dlg.get_size_mb(),
                 tags=dlg.get_tags(), created_by=dlg.get_author(),
             )
+            self._refresh()
 
     def _on_edit(self):
         rec = self._get_selected_record()
@@ -421,16 +422,19 @@ class DatasetTab(QWidget):
             rec.tags        = dlg.get_tags()
             rec.created_by  = dlg.get_author()
             self._engine.update_dataset(rec)
+            self._refresh()
 
     def _on_delete(self):
         rec = self._get_selected_record()
         if rec:
             self._engine.delete_dataset(rec.dataset_id)
+            self._refresh()
 
     def _on_snapshot(self):
         rec = self._get_selected_record()
         if rec:
             self._engine.take_snapshot(rec.dataset_id)
+            self._refresh()
 
     def _get_record_at(self, row: int) -> Optional[DatasetRecord]:
         item = self._table.item(row, COL_ID)

@@ -430,6 +430,7 @@ class StrategyTab(QWidget):
                 tags=dlg.get_tags(), feature_ids=dlg.get_feature_ids(),
                 dataset_ids=dlg.get_dataset_ids(),
             )
+            self._refresh()
 
     def _on_edit(self):
         rec = self._get_selected_record()
@@ -449,10 +450,13 @@ class StrategyTab(QWidget):
             rec.feature_ids   = dlg.get_feature_ids()
             rec.dataset_ids   = dlg.get_dataset_ids()
             self._engine.update_strategy(rec)
+            self._refresh()
 
     def _on_delete(self):
         rec = self._get_selected_record()
-        if rec: self._engine.delete_strategy(rec.strategy_id)
+        if rec:
+            self._engine.delete_strategy(rec.strategy_id)
+            self._refresh()
 
     def _on_perf(self):
         rec = self._get_selected_record()
@@ -468,6 +472,7 @@ class StrategyTab(QWidget):
                 turnover=dlg.get_turnover(),
                 profit_factor=dlg.get_profit_factor(),
             )
+            self._refresh()
 
     def _on_version(self):
         rec = self._get_selected_record()
@@ -478,18 +483,25 @@ class StrategyTab(QWidget):
                 rec.strategy_id,
                 note=dlg.get_note(), created_by=dlg.get_author(),
             )
+            self._refresh()
 
     def _on_publish(self):
         rec = self._get_selected_record()
-        if rec: self._engine.publish_strategy(rec.strategy_id)
+        if rec:
+            self._engine.publish_strategy(rec.strategy_id)
+            self._refresh()
 
     def _on_testing(self):
         rec = self._get_selected_record()
-        if rec: self._engine.set_strategy_testing(rec.strategy_id)
+        if rec:
+            self._engine.set_strategy_testing(rec.strategy_id)
+            self._refresh()
 
     def _on_retire(self):
         rec = self._get_selected_record()
-        if rec: self._engine.retire_strategy(rec.strategy_id)
+        if rec:
+            self._engine.retire_strategy(rec.strategy_id)
+            self._refresh()
 
     def _get_record_at(self, row):
         item = self._table.item(row, COL_ID)

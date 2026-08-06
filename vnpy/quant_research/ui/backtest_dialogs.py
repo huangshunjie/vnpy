@@ -22,10 +22,11 @@ from ..model.backtest_model import BacktestRecord
 class BacktestSubmitDialog(QDialog):
     """提交 / 编辑回测对话框。"""
 
-    def __init__(self, parent=None, record: Optional[BacktestRecord] = None):
+    def __init__(self, parent=None, record: Optional[BacktestRecord] = None, engine=None):
         super().__init__(parent)
         self._record  = record
         self._editing = record is not None
+        self._engine  = engine
         self.setWindowTitle("编辑回测" if self._editing else "提交回测")
         self.setMinimumWidth(540)
         self._init_ui()
@@ -43,12 +44,23 @@ class BacktestSubmitDialog(QDialog):
         self._name_edit.setPlaceholderText("回测名称（必填）")
         form.addRow("名称 *", self._name_edit)
 
-        self._strategy_id_edit = QLineEdit()
-        self._strategy_id_edit.setPlaceholderText("关联策略 ID（如 ST-20260707-001）")
-        form.addRow("策略 ID", self._strategy_id_edit)
+        self._strategy_combo = QComboBox()
+        self._strategy_combo.setEditable(True)
+        self._strategy_combo.addItem("（不关联策略）", "")
+        # 从engine获取已注册策略列表
+        if self._engine:
+            try:
+                strategies = self._engine.list_strategies()
+                for s in strategies:
+                    self._strategy_combo.addItem(
+                        f"{s.strategy_id}  {s.name}", s.strategy_id)
+            except Exception:
+                pass
+        self._strategy_combo.currentIndexChanged.connect(self._on_strategy_changed)
+        form.addRow("策略 ID", self._strategy_combo)
 
         self._strategy_name_edit = QLineEdit()
-        self._strategy_name_edit.setPlaceholderText("策略名称")
+        self._strategy_name_edit.setPlaceholderText("策略名称（选择策略后自动填充）")
         form.addRow("策略名称", self._strategy_name_edit)
 
         self._universe_edit = QLineEdit()
@@ -131,10 +143,29 @@ class BacktestSubmitDialog(QDialog):
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
 
+    def _on_strategy_changed(self, index):
+        """策略下拉选择变化时，自动填充策略名称"""
+        strategy_id = self._strategy_combo.currentData()
+        if strategy_id and self._engine:
+            try:
+                s = self._engine.get_strategy(strategy_id)
+                if s:
+                    self._strategy_name_edit.setText(s.name)
+            except Exception:
+                pass
+
     def _load_record(self):
         r = self._record
         self._name_edit.setText(r.name)
-        self._strategy_id_edit.setText(r.strategy_id)
+        # 在下拉中查找匹配的策略ID
+        found = False
+        for i in range(self._strategy_combo.count()):
+            if self._strategy_combo.itemData(i) == r.strategy_id:
+                self._strategy_combo.setCurrentIndex(i)
+                found = True
+                break
+        if not found and r.strategy_id:
+            self._strategy_combo.setEditText(r.strategy_id)
         self._strategy_name_edit.setText(r.strategy_name)
         self._universe_edit.setText(r.universe)
         self._author_edit.setText(r.created_by)
@@ -159,7 +190,15 @@ class BacktestSubmitDialog(QDialog):
         return [x.strip() for x in t.split(",") if x.strip()]
 
     def get_name(self)            -> str:         return self._name_edit.text().strip()
-    def get_strategy_id(self)     -> str:         return self._strategy_id_edit.text().strip()
+    def get_strategy_id(self)     -> str:
+        # 优先用下拉选中的data，否则用编辑文本（手动输入的ID）
+        data = self._strategy_combo.currentData()
+        if data:
+            return data
+        text = self._strategy_combo.currentText().strip()
+        if text == "（不关联策略）":
+            return ""
+        return text
     def get_strategy_name(self)   -> str:         return self._strategy_name_edit.text().strip()
     def get_universe(self)        -> str:         return self._universe_edit.text().strip()
     def get_author(self)          -> str:         return self._author_edit.text().strip()

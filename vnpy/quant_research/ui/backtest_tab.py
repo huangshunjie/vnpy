@@ -423,7 +423,7 @@ class BacktestTab(QWidget):
         if rec: self._detail.load(rec)
         else:   self._detail.clear()
     def _on_new(self):
-        dlg = BacktestSubmitDialog(parent=self)
+        dlg = BacktestSubmitDialog(parent=self, engine=self._engine)
         if dlg.exec() == BacktestSubmitDialog.Accepted:
             self._engine.submit_backtest(
                 name=dlg.get_name(), strategy_id=dlg.get_strategy_id(),
@@ -438,10 +438,11 @@ class BacktestTab(QWidget):
                 model_ids=dlg.get_model_ids(),
                 created_by=dlg.get_author(),
             )
+            self._refresh()
     def _on_edit(self):
         rec = self._get_selected_record()
         if not rec: return
-        dlg = BacktestSubmitDialog(parent=self, record=rec)
+        dlg = BacktestSubmitDialog(parent=self, record=rec, engine=self._engine)
         if dlg.exec() == BacktestSubmitDialog.Accepted:
             rec.name            = dlg.get_name()
             rec.strategy_id     = dlg.get_strategy_id()
@@ -458,12 +459,17 @@ class BacktestTab(QWidget):
             rec.dataset_ids     = dlg.get_dataset_ids()
             rec.model_ids       = dlg.get_model_ids()
             self._engine.update_backtest(rec)
+            self._refresh()
     def _on_delete(self):
         rec = self._get_selected_record()
-        if rec: self._engine.delete_backtest(rec.backtest_id)
+        if rec:
+            self._engine.delete_backtest(rec.backtest_id)
+            self._refresh()
     def _on_run(self):
         rec = self._get_selected_record()
-        if rec: self._engine.run_backtest(rec.backtest_id)
+        if rec:
+            self._engine.run_backtest(rec.backtest_id)
+            self._refresh()
     def _on_complete(self):
         rec = self._get_selected_record()
         if not rec: return
@@ -485,12 +491,15 @@ class BacktestTab(QWidget):
                 max_position_conc=dlg.get_max_position_conc(),
                 monthly_returns=dlg.get_monthly_returns(),
             )
+            self._refresh()
     def _on_fail(self):
         rec = self._get_selected_record()
         if not rec: return
         from PySide6.QtWidgets import QInputDialog
         msg, ok = QInputDialog.getText(self, '标记失败', '错误信息（可留空）：')
-        if ok: self._engine.fail_backtest(rec.backtest_id, msg)
+        if ok:
+            self._engine.fail_backtest(rec.backtest_id, msg)
+            self._refresh()
     def _on_compare(self):
         rows = {idx.row() for idx in self._table.selectedIndexes()}
         ids = []

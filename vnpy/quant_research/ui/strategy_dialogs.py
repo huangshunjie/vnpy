@@ -248,14 +248,14 @@ class StrategyPerformanceDialog(QDialog):
             return s
 
         self._annual_spin   = _pct()
-        self._dd_spin       = _pct(-1.0, 0.0)
+        self._dd_spin       = _pct(0.0, 1.0)
+        self._dd_spin.setValue(0.0)
         self._sharpe_spin   = _ratio()
         self._sortino_spin  = _ratio()
         self._calmar_spin   = _ratio()
         self._winrate_spin  = _pct(0.0, 1.0)
         self._turnover_spin = _ratio(0.0, 100.0)
         self._pf_spin       = _ratio(0.0, 20.0)
-
         form.addRow("年化收益",  self._annual_spin)
         form.addRow("最大回撤",  self._dd_spin)
         form.addRow("Sharpe",    self._sharpe_spin)

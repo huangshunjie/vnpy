@@ -440,6 +440,7 @@ class ModelTab(QWidget):
                 tags=dlg.get_tags(), feature_ids=dlg.get_feature_ids(),
                 dataset_ids=dlg.get_dataset_ids(),
             )
+            self._refresh()
 
     def _on_edit(self):
         rec = self._get_selected_record()
@@ -460,10 +461,13 @@ class ModelTab(QWidget):
             rec.feature_ids = dlg.get_feature_ids()
             rec.dataset_ids = dlg.get_dataset_ids()
             self._engine.update_model(rec)
+            self._refresh()
 
     def _on_delete(self):
         rec = self._get_selected_record()
-        if rec: self._engine.delete_model(rec.model_id)
+        if rec:
+            self._engine.delete_model(rec.model_id)
+            self._refresh()
 
     def _on_eval(self):
         rec = self._get_selected_record()
@@ -477,6 +481,7 @@ class ModelTab(QWidget):
                 f1=dlg.get_f1(),
                 custom_metrics=dlg.get_custom_metrics(),
             )
+            self._refresh()
 
     def _on_run(self):
         rec = self._get_selected_record()
@@ -492,6 +497,7 @@ class ModelTab(QWidget):
                 duration_sec=dlg.get_duration(),
                 created_by=dlg.get_author(),
             )
+            self._refresh()
 
     def _on_deploy(self):
         rec = self._get_selected_record()
@@ -502,14 +508,19 @@ class ModelTab(QWidget):
                 rec.model_id,
                 env=dlg.get_env(), endpoint=dlg.get_endpoint(),
             )
+            self._refresh()
 
     def _on_set_evaluated(self):
         rec = self._get_selected_record()
-        if rec: self._engine.set_model_evaluated(rec.model_id)
+        if rec:
+            self._engine.set_model_evaluated(rec.model_id)
+            self._refresh()
 
     def _on_retire(self):
         rec = self._get_selected_record()
-        if rec: self._engine.retire_model(rec.model_id)
+        if rec:
+            self._engine.retire_model(rec.model_id)
+            self._refresh()
 
     def _get_record_at(self, row):
         item = self._table.item(row, COL_ID)
