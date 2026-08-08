@@ -165,11 +165,28 @@ class EventSearcher:
         """应用冷却期规则"""
         selected = []
         last_idx = None
+        cooldown_td = pd.Timedelta(days=cooldown_days)
         
         for idx in trigger_indices:
-            if last_idx is None or (idx - last_idx >= cooldown_days):
+            if last_idx is None:
                 selected.append(idx)
                 last_idx = idx
+            else:
+                # 兼容 Timestamp 索引和整数索引
+                try:
+                    diff = idx - last_idx
+                    if isinstance(diff, pd.Timedelta):
+                        if diff >= cooldown_td:
+                            selected.append(idx)
+                            last_idx = idx
+                    else:
+                        if diff >= cooldown_days:
+                            selected.append(idx)
+                            last_idx = idx
+                except TypeError:
+                    # 无法比较时直接加入
+                    selected.append(idx)
+                    last_idx = idx
         
         return selected
     
@@ -223,15 +240,15 @@ class EventSearcher:
         return events
     
     def _find_event_index(self, df: pd.DataFrame, event: EventRecord) -> Optional[int]:
-        """找到事件对应的索引"""
+        """找到事件对应的位置索引（整数）"""
         if 'symbol' in df.columns and 'datetime' in df.columns:
             mask = (df['symbol'] == event.symbol) & (df['datetime'] == event.datetime)
-            matches = df.index[mask].tolist()
-            return matches[0] if matches else None
+            positions = np.where(mask)[0]
+            return int(positions[0]) if len(positions) > 0 else None
         else:
             mask = df['close'] == event.entry_close
-            matches = df.index[mask].tolist()
-            return matches[0] if matches else None
+            positions = np.where(mask)[0]
+            return int(positions[0]) if len(positions) > 0 else None
     
     def _calculate_period_return(
         self, df: pd.DataFrame, event_idx: int, period: int, entry_price: float

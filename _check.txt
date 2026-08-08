@@ -1,0 +1,4 @@
+app_name=KLineBehaviorLab
+in_groups=True
+app_module=vnpy.kline_behavior_lab
+widget_name=KLineBehaviorLabWidget

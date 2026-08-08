@@ -9,10 +9,12 @@ from functools import partial
 from importlib import import_module
 from typing import Callable, Dict, List, Tuple
 import pathlib
+import logging
 
 from .qt import QtCore, QtGui, QtWidgets
 
 _ICO_DIR   = pathlib.Path(__file__).parent / "ico"
+_logger = logging.getLogger("vnpy.sidebar")
 
 # 这些 App 保留在工具栏直接显示（原 VeighNa 自带）
 _TOOLBAR_APPS: set = {"CtaStrategy", "CtaBacktester", "DataManager", "PortfolioManager", "PaperAccount"}
@@ -26,6 +28,7 @@ APP_GROUPS: List[Tuple[str, str, str, List[str]]] = [
     ("研究平台", "🔬", "#13c2c2", [
         "BatchResearch", "FactorResearch", "ResearchValidation",
         "QuantResearch", "ResearchOps", "StrategyCondition",
+        "KLineBehaviorLab",
     ]),
     ("AI 智能", "🤖", "#722ed1", [
         "AlphaFactory2", "CapitalAllocation", "MarketRegime",
@@ -179,7 +182,8 @@ class VeighNaAppsWindow(QtWidgets.QDialog):
             lbl = QtWidgets.QLabel(text); lbl.setStyleSheet(style)
             hl.addWidget(lbl)
         hl.addStretch()
-        total = sum(len(ns) for _,_,_,ns in APP_GROUPS)
+        # 使用实际加载成功的应用数量
+        total = len(app_funcs)
         cnt = QtWidgets.QLabel(f"{total} 个应用")
         cnt.setStyleSheet("color:#58a6ff;font-size:14px;background:transparent;")
         hl.addWidget(cnt)
@@ -256,7 +260,11 @@ def _patched_init_menu(self) -> None:
         try:
             ui_mod = import_module(app.app_module + ".ui")
             wcls   = getattr(ui_mod, app.widget_name)
-        except Exception:
+        except Exception as _e:
+            import traceback
+            _logger.warning(
+                "跳过应用 %s: %s\n%s", app.app_name, _e,
+                traceback.format_exc())
             continue
         func = partial(self.open_widget, wcls, app.app_name)
         on_toolbar = app.app_name in _TOOLBAR_APPS

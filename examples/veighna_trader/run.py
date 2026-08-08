@@ -62,6 +62,7 @@ from vnpy.strategy_condition import StrategyConditionApp
 # from vnpy_riskmanager import RiskManagerApp
 # from vnpy_webtrader import WebTraderApp
 from vnpy_portfoliomanager import PortfolioManagerApp
+from vnpy.kline_behavior_lab import KLineBehaviorLabApp
 
 
 def main():
@@ -132,6 +133,7 @@ def main():
     # main_engine.add_app(RiskManagerApp)
     # main_engine.add_app(WebTraderApp)
     main_engine.add_app(PortfolioManagerApp)
+    main_engine.add_app(KLineBehaviorLabApp)
 
     from vnpy.trader.ui.sidebar import apply_sidebar_patch
     apply_sidebar_patch()
@@ -144,3 +146,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

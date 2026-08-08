@@ -1,0 +1,67 @@
+return_1|(close - close.shift(1)) / close.shift(1)|0
+return_3|(close - close.shift(3)) / close.shift(3)|0
+return_5|(close - close.shift(5)) / close.shift(5)|0
+gap_return|(open - close.shift(1)) / close.shift(1)|0
+intraday_return|(close - open) / open|0
+body_ratio|abs(close - open) / (high - low + 1e-8)|0
+upper_shadow_ratio|(high - max(open, close)) / (high - low + 1e-8)|0
+lower_shadow_ratio|(min(open, close) - low) / (high - low + 1e-8)|0
+close_location|(close - low) / (high - low + 1e-8)|0
+range_pct|(high - low) / open|0
+atr_20|talib.ATR(high, low, close, timeperiod=20)|0
+volatility_20|returns.rolling(20).std() * np.sqrt(252)|0
+volume_ratio|volume / volume.rolling(20).mean()|0
+amount_ratio|amount / amount.rolling(20).mean()|0
+ma5|close.rolling(5).mean()|0
+ma20|close.rolling(20).mean()|0
+price_position|(close - low_60) / (high_60 - low_60 + 1e-8)|0
+rsi_14|talib.RSI(close, timeperiod=14)|0
+return_10|(close - close.shift(10)) / close.shift(10)|0
+return_20|(close - close.shift(20)) / close.shift(20)|0
+log_return_1|np.log(close / close.shift(1))|0
+overnight_return|(open - close.shift(1)) / close.shift(1)|0
+body_pct|abs(close - open) / open|0
+upper_shadow_pct|(high - max(open, close)) / open|0
+lower_shadow_pct|(min(open, close) - low) / open|0
+is_green|(close > open).astype(int)|0
+is_red|(close < open).astype(int)|0
+is_doji|(body_ratio < 0.1).astype(int)|1
+is_hammer|(lower_shadow_ratio > 0.4) & (upper_shadow_ratio < 0.2) & (body_ratio < 0.4)|3
+atr_10|ATR(10)|0
+volatility_10|returns.rolling(10).std() * np.sqrt(252)|0
+volatility_percentile|volatility_20.rolling(60).rank(pct=True)|0
+realized_volatility_5|((high - low) / close).rolling(5).mean()|0
+volume_ratio_5|volume / volume.rolling(5).mean()|0
+volume_spike|(volume > volume.rolling(20).mean() * 2).astype(int)|0
+volume_shrink|(volume < volume.rolling(20).mean() * 0.5).astype(int)|0
+turnover_ratio|turnover_rate / turnover_rate.rolling(20).mean()|0
+ma10|close.rolling(10).mean()|0
+ma60|close.rolling(60).mean()|0
+ma_slope_5|(ma5 - ma5.shift(5)) / ma5.shift(5)|0
+ma_slope_20|(ma20 - ma20.shift(10)) / ma20.shift(10)|0
+price_to_ma5|(close - ma5) / ma5|0
+price_to_ma20|(close - ma20) / ma20|0
+ma_alignment|((ma5 > ma10) & (ma10 > ma20) & (ma20 > ma60)).astype(int)|0
+new_high_20|(close >= close.rolling(20).max()).astype(int)|0
+new_low_20|(close <= close.rolling(20).min()).astype(int)|0
+pullback_from_high|(close - close.rolling(20).max()) / close.rolling(20).max()|0
+bounce_from_low|(close - close.rolling(20).min()) / close.rolling(20).min()|0
+reversal_score|(return_1 < -0.03) & (lower_shadow_ratio > 0.4) & (volume_ratio > 1.5)|3
+v_reversal|(return_5 < -0.10) & (return_1 > 0.03)|2
+rsi_6|RSI(6)|0
+rsi_oversold|(rsi_14 < 30).astype(int)|1
+rsi_overbought|(rsi_14 > 70).astype(int)|1
+macd|EMA(12) - EMA(26)|0
+macd_signal|EMA(macd, 9)|0
+macd_histogram|macd - macd_signal|0
+momentum_5|close - close.shift(5)|0
+momentum_10|close - close.shift(10)|0
+is_big_red|(return_1 < -0.03) & (body_ratio > 0.6)|2
+is_big_green|(return_1 > 0.03) & (body_ratio > 0.6)|2
+is_shooting_star|(upper_shadow_ratio > 0.4) & (lower_shadow_ratio < 0.2) & (body_ratio < 0.4)|3
+three_red_soldiers|(close < open) & (close.shift(1) < open.shift(1)) & (close.shift(2) < open.shift(2))|0
+three_green_soldiers|(close > open) & (close.shift(1) > open.shift(1)) & (close.shift(2) > open.shift(2))|0
+morning_star|(is_red.shift(2)) & (is_doji.shift(1)) & (is_green)|0
+engulfing_bullish|(close > open) & (close.shift(1) < open.shift(1)) & (open < close.shift(1)) & (close > open.shift(1))|0
+relative_strength|return_20 - market_return_20|0
+volume_rank|volume.rank(pct=True)|0

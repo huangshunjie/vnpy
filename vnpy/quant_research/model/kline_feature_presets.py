@@ -2,16 +2,18 @@
 quant_research/model/kline_feature_presets.py
 
 预置K线特征库
-包含50+个标准K线特征的定义
+包含60+个标准K线特征的定义
 """
 from .kline_feature_model import KLineFeatureDefinition, KLineFeatureType, FeatureComplexity
+from .kline_feature_extended import EXTENDED_KLINE_FEATURES
+from .kline_feature_extended2 import EXTENDED_KLINE_FEATURES_2
 
 
 # ========================================================================
-# 预置K线特征库
+# 基础K线特征库
 # ========================================================================
 
-PRESET_KLINE_FEATURES = {
+BASE_KLINE_FEATURES = {
     # ====================================================================
     # 收益类特征 (RETURN)
     # ====================================================================
@@ -228,3 +230,59 @@ PRESET_KLINE_FEATURES = {
         value_range_max=100.0,
     ),
 }
+
+# 合并所有特征
+PRESET_KLINE_FEATURES = {}
+PRESET_KLINE_FEATURES.update(BASE_KLINE_FEATURES)
+PRESET_KLINE_FEATURES.update(EXTENDED_KLINE_FEATURES)
+PRESET_KLINE_FEATURES.update(EXTENDED_KLINE_FEATURES_2)
+
+
+# ========================================================================
+# 辅助函数
+# ========================================================================
+
+def get_feature_by_category(category: KLineFeatureType) -> dict:
+    """按类型筛选特征"""
+    return {k: v for k, v in PRESET_KLINE_FEATURES.items() if v.feature_type == category}
+
+
+def get_simple_features() -> dict:
+    """获取所有简单特征（无依赖）"""
+    return {k: v for k, v in PRESET_KLINE_FEATURES.items() if v.complexity == FeatureComplexity.SIMPLE}
+
+
+def get_condition_suitable_features() -> dict:
+    """获取适合做条件的特征"""
+    return {k: v for k, v in PRESET_KLINE_FEATURES.items() if v.suitable_for_condition}
+
+
+def get_alpha_suitable_features() -> dict:
+    """获取适合做Alpha因子的特征"""
+    return {k: v for k, v in PRESET_KLINE_FEATURES.items() if v.suitable_for_alpha}
+
+
+def get_feature_count() -> int:
+    """获取特征总数"""
+    return len(PRESET_KLINE_FEATURES)
+
+
+def get_feature_summary() -> dict:
+    """获取特征库统计摘要"""
+    summary = {
+        "total": len(PRESET_KLINE_FEATURES),
+        "by_type": {},
+        "by_complexity": {},
+        "suitable_for_condition": len(get_condition_suitable_features()),
+        "suitable_for_alpha": len(get_alpha_suitable_features()),
+    }
+    
+    for feature_type in KLineFeatureType:
+        count = len(get_feature_by_category(feature_type))
+        summary["by_type"][feature_type.value] = count
+    
+    for complexity in FeatureComplexity:
+        count = len([f for f in PRESET_KLINE_FEATURES.values() if f.complexity == complexity])
+        summary["by_complexity"][complexity.value] = count
+    
+    return summary

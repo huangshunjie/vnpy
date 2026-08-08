@@ -161,19 +161,25 @@ class KLineFeatureCalculator:
         close = df['close']
         volume = df['volume']
         
-        # 根据公式计算（示例）
-        # 实际应该使用安全的表达式计算器
+        # 构建 eval 命名空间：基础列 + 已计算的所有特征列
+        eval_ns = {
+            'open': open_price,
+            'high': high,
+            'low': low,
+            'close': close,
+            'volume': volume,
+            'df': df,
+            'np': np,
+            'pd': pd,
+        }
+        # 将 DataFrame 中已有的列（含已计算的依赖特征）加入命名空间
+        for col in df.columns:
+            if col not in eval_ns:
+                eval_ns[col] = df[col]
+        
+        # 根据公式计算
         try:
-            result = eval(feature_def.formula, {
-                'open': open_price,
-                'high': high,
-                'low': low,
-                'close': close,
-                'volume': volume,
-                'df': df,
-                'np': np,
-                'pd': pd,
-            })
+            result = eval(feature_def.formula, eval_ns)
             return result
         except Exception as e:
             # 公式计算失败，返回NaN
