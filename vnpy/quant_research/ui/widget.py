@@ -32,6 +32,7 @@ from .experiment_tab import ExperimentTab
 from .dataset_tab    import DatasetTab
 from .feature_tab    import FeatureTab
 from .strategy_tab   import StrategyTab
+from .behavior_tab   import BehaviorResearchTab
 from .model_tab      import ModelTab
 from .backtest_tab   import BacktestTab
 from .report_tab     import ReportTab
@@ -244,6 +245,7 @@ class ResearchPlatformWidget(QWidget):
         self._experiment_tab = ExperimentTab(self.engine)
         self._dataset_tab    = DatasetTab(self.engine)
         self._feature_tab    = FeatureTab(self.engine)
+        self._behavior_tab   = BehaviorResearchTab(self.engine)
         self._strategy_tab   = StrategyTab(self.engine)
         self._model_tab      = ModelTab(self.engine)
         self._backtest_tab   = BacktestTab(self.engine)
@@ -257,6 +259,7 @@ class ResearchPlatformWidget(QWidget):
             (self._experiment_tab, "🔬 实验 (Experiments)"),
             (self._dataset_tab,    "🗄 数据集 (Datasets)"),
             (self._feature_tab,    "🧩 特征 (Features)"),
+            (self._behavior_tab,   "Behavior Research"),
             (self._strategy_tab,   "📈 策略 (Strategies)"),
             (self._model_tab,      "🤖 模型 (Models)"),
             (self._backtest_tab,   "⏮ 回测 (Backtests)"),

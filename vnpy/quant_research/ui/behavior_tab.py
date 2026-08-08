@@ -1,0 +1,269 @@
+"""
+quant_research/ui/behavior_tab.py
+
+K线行为研究Tab（第1部分）
+主要功能：
+1. 定义研究条件
+2. 选择特征和参数
+3. 执行事件搜索
+4. 展示研究结果
+"""
+from __future__ import annotations
+from typing import List, Optional
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
+    QPushButton, QLabel, QLineEdit, QTextEdit,
+    QComboBox, QSpinBox, QGroupBox, QFormLayout,
+    QTableWidget, QTableWidgetItem, QHeaderView,
+    QAbstractItemView, QProgressBar,
+)
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
+
+from ..engine import ResearchEngine
+from ..model.kline_event_model import EventSamplingRule
+from ..behavior import KLineFeatureCalculator
+
+
+class BehaviorResearchTab(QWidget):
+    """K线行为研究主Tab"""
+    
+    def __init__(self, engine: ResearchEngine, parent=None):
+        super().__init__(parent)
+        self._engine = engine
+        self._feature_calculator = KLineFeatureCalculator()
+        self._init_ui()
+        
+    def _init_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(6, 6, 6, 6)
+        
+        splitter = QSplitter(Qt.Vertical)
+        splitter.addWidget(self._create_config_widget())
+        splitter.addWidget(self._create_results_widget())
+        splitter.setSizes([300, 500])
+        root.addWidget(splitter)
+        
+        self._status_label = QLabel("就绪")
+        root.addWidget(self._status_label)
+    
+    def _create_config_widget(self) -> QWidget:
+        """创建配置区域"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        # 基本信息
+        info_group = QGroupBox("研究基本信息")
+        info_layout = QFormLayout(info_group)
+        
+        self._research_name_edit = QLineEdit()
+        self._research_name_edit.setPlaceholderText("如：大阴线底部反转研究")
+        info_layout.addRow("研究名称:", self._research_name_edit)
+        
+        self._research_desc_edit = QTextEdit()
+        self._research_desc_edit.setPlaceholderText("研究描述...")
+        self._research_desc_edit.setMaximumHeight(60)
+        info_layout.addRow("描述:", self._research_desc_edit)
+        
+        layout.addWidget(info_group)
+        
+        # 数据范围
+        data_group = QGroupBox("数据范围")
+        data_layout = QFormLayout(data_group)
+        
+        self._dataset_combo = QComboBox()
+        self._dataset_combo.addItem("选择数据集...", "")
+        datasets = self._engine.list_datasets()
+        for ds in datasets:
+            self._dataset_combo.addItem(f"{ds.name}", ds.dataset_id)
+        data_layout.addRow("数据集:", self._dataset_combo)
+        
+        layout.addWidget(data_group)
+        
+        # 研究条件
+        condition_group = QGroupBox("研究条件")
+        condition_layout = QVBoxLayout(condition_group)
+        
+        condition_layout.addWidget(QLabel("条件表达式（Python语法）:"))
+        self._condition_edit = QTextEdit()
+        self._condition_edit.setPlaceholderText(
+            "示例：lower_shadow_ratio > 0.4 AND volume_ratio > 2"
+        )
+        self._condition_edit.setMaximumHeight(80)
+        condition_layout.addWidget(self._condition_edit)
+        
+        btn_layout = QHBoxLayout()
+        self._btn_view_features = QPushButton("查看可用特征")
+        self._btn_view_features.clicked.connect(self._on_view_features)
+        btn_layout.addWidget(self._btn_view_features)
+        btn_layout.addStretch()
+        condition_layout.addLayout(btn_layout)
+        
+        layout.addWidget(condition_group)
+        
+        # 采样参数
+        param_group = QGroupBox("采样规则")
+        param_layout = QFormLayout(param_group)
+        
+        self._sampling_combo = QComboBox()
+        self._sampling_combo.addItem("全部事件", EventSamplingRule.ALL)
+        self._sampling_combo.addItem("首次触发", EventSamplingRule.FIRST_TRIGGER)
+        self._sampling_combo.addItem("冷却期", EventSamplingRule.COOLDOWN)
+        self._sampling_combo.setCurrentIndex(2)
+        param_layout.addRow("采样规则:", self._sampling_combo)
+        
+        self._cooldown_spin = QSpinBox()
+        self._cooldown_spin.setRange(1, 60)
+        self._cooldown_spin.setValue(5)
+        self._cooldown_spin.setSuffix(" 天")
+        param_layout.addRow("冷却期:", self._cooldown_spin)
+        
+        self._forward_periods_edit = QLineEdit("1,3,5,10,20")
+        param_layout.addRow("未来周期:", self._forward_periods_edit)
+        
+        layout.addWidget(param_group)
+        
+        # 执行按钮
+        btn_layout = QHBoxLayout()
+        
+        self._btn_run = QPushButton("🚀 开始研究")
+        self._btn_run.setMinimumHeight(40)
+        self._btn_run.setStyleSheet("""
+            QPushButton {
+                background-color: #0d6efd;
+                color: white;
+                border-radius: 4px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #0b5ed7; }
+        """)
+        self._btn_run.clicked.connect(self._on_run_research)
+        
+        self._btn_save = QPushButton("💾 保存")
+        self._btn_save.setMinimumHeight(40)
+        self._btn_save.setEnabled(False)
+        
+        btn_layout.addWidget(self._btn_run)
+        btn_layout.addWidget(self._btn_save)
+        btn_layout.addStretch()
+        
+        layout.addLayout(btn_layout)
+        
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setVisible(False)
+        layout.addWidget(self._progress_bar)
+        
+        return widget
+    
+    def _create_results_widget(self) -> QWidget:
+        """创建结果展示区"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        title_label = QLabel("研究结果")
+        title_label.setFont(QFont("", 12, QFont.Bold))
+        layout.addWidget(title_label)
+        
+        # 统计摘要
+        summary_layout = QHBoxLayout()
+        self._events_count_label = QLabel("事件数: 0")
+        self._symbols_count_label = QLabel("标的数: 0")
+        summary_layout.addWidget(self._events_count_label)
+        summary_layout.addWidget(self._symbols_count_label)
+        summary_layout.addStretch()
+        layout.addLayout(summary_layout)
+        
+        # 结果表格
+        self._results_table = QTableWidget(0, 7)
+        self._results_table.setHorizontalHeaderLabels([
+            "事件ID", "标的", "日期", "1日收益", 
+            "5日收益", "10日收益", "MFE/MAE"
+        ])
+        self._results_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self._results_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._results_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._results_table.setAlternatingRowColors(True)
+        layout.addWidget(self._results_table)
+        
+        # 统计指标
+        stats_label = QLabel("5日收益统计")
+        stats_label.setFont(QFont("", 11, QFont.Bold))
+        layout.addWidget(stats_label)
+        
+        stats_layout = QHBoxLayout()
+        self._mean_return_label = QLabel("平均收益: --")
+        self._win_rate_label = QLabel("胜率: --")
+        self._sharpe_label = QLabel("夏普: --")
+        stats_layout.addWidget(self._mean_return_label)
+        stats_layout.addWidget(self._win_rate_label)
+        stats_layout.addWidget(self._sharpe_label)
+        stats_layout.addStretch()
+        layout.addLayout(stats_layout)
+        
+        return widget
+    
+    def _on_view_features(self):
+        """查看可用特征"""
+        features = self._feature_calculator.get_available_features()
+        
+        from PySide6.QtWidgets import QDialog, QTextEdit
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("可用K线特征")
+        dialog.resize(500, 400)
+        
+        layout = QVBoxLayout(dialog)
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+        
+        text = "## 可用特征\n\n"
+        for feature in sorted(features):
+            info = self._feature_calculator.get_feature_info(feature)
+            if info:
+                text += f"**{feature}** - {info.display_name}\n"
+                text += f"  {info.description}\n\n"
+        
+        text_edit.setMarkdown(text)
+        layout.addWidget(text_edit)
+        
+        btn = QPushButton("关闭")
+        btn.clicked.connect(dialog.accept)
+        layout.addWidget(btn)
+        
+        dialog.exec()
+    
+    def _on_run_research(self):
+        """执行研究"""
+        from PySide6.QtWidgets import QMessageBox
+        
+        if not self._validate_inputs():
+            return
+        
+        research_name = self._research_name_edit.text().strip() or "未命名研究"
+        condition = self._condition_edit.toPlainText().strip()
+        
+        QMessageBox.information(
+            self,
+            "研究执行",
+            f"研究配置：\n\n"
+            f"名称: {research_name}\n"
+            f"条件: {condition}\n\n"
+            f"核心引擎已就绪，实际执行功能开发中..."
+        )
+    
+    def _validate_inputs(self) -> bool:
+        """验证输入"""
+        from PySide6.QtWidgets import QMessageBox
+        
+        if not self._dataset_combo.currentData():
+            QMessageBox.warning(self, "验证失败", "请选择数据集")
+            return False
+        
+        if not self._condition_edit.toPlainText().strip():
+            QMessageBox.warning(self, "验证失败", "请输入研究条件")
+            return False
+        
+        return True
