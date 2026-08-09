@@ -42,32 +42,33 @@ class KLineFeatureDefinition:
     feature_type: KLineFeatureType = KLineFeatureType.RETURN
     description: str = ""
     formula: str = ""              # 计算公式
-    
+    subcategory: str = ""          # 子分类（用于UI二级分组，如量价的"基础指标"/"放量专题"等）
+
     # 计算参数
     lookback_period: int = 0       # 回看周期
     complexity: FeatureComplexity = FeatureComplexity.SIMPLE
     dependencies: List[str] = field(default_factory=list)
-    
+
     # 数据要求
     requires_ohlcv: bool = True
     requires_amount: bool = False
     requires_limit: bool = False
     requires_market_cap: bool = False
-    
+
     # 实时计算支持
     realtime_supported: bool = True
     calculation_delay: int = 0
-    
+
     # 数值范围和归一化
     value_range_min: Optional[float] = None
     value_range_max: Optional[float] = None
     normalize_method: str = "none"
-    
+
     # 用途标记
     suitable_for_alpha: bool = True
     suitable_for_condition: bool = True
     suitable_for_filter: bool = True
-    
+
     # 版本和作者
     version: str = "v1.0"
     author: str = "system"

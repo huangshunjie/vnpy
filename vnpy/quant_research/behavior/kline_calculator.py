@@ -12,6 +12,7 @@ from datetime import datetime
 
 from ..model.kline_feature_model import KLineFeatureDefinition, FeatureComplexity
 from ..model.kline_feature_presets import PRESET_KLINE_FEATURES
+from .volume_price_calculator import VP_CALCULATOR_MAP
 
 
 class KLineFeatureCalculator:
@@ -131,6 +132,11 @@ class KLineFeatureCalculator:
         
         if not feature_def:
             raise ValueError(f"未知的特征: {feature_name}")
+        
+        # 优先检查量价关系向量化计算函数
+        vp_calc = VP_CALCULATOR_MAP.get(feature_name)
+        if vp_calc:
+            return vp_calc(df)
         
         # 根据特征类型选择计算方法
         calculator = getattr(self, f'_calc_{feature_name}', None)

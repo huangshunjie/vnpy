@@ -13,6 +13,7 @@ from vnpy.trader.ui import QtCore, QtWidgets
 from .ui.bulk_download_dialog import BulkDownloadDialog
 from .ui.index_download_dialog import IndexDownloadDialog
 from .ui.minute_import_dialog import MinuteImportDialog
+from .ui.index_constituents_dialog import IndexConstituentsDialog
 
 _A_SHARE_EXCHANGES = {Exchange.SSE, Exchange.SZSE, Exchange.BSE}
 
@@ -55,6 +56,11 @@ def _minute_import(self: ManagerWidget) -> None:
     dlg.exec_()
 
 
+def _open_constituents_dialog(self: ManagerWidget) -> None:
+    dlg = IndexConstituentsDialog(parent=self)
+    dlg.exec_()
+
+
 def _patched_init_ui(self: ManagerWidget) -> None:
     _original_init_ui(self)
     main_layout: QtWidgets.QVBoxLayout = self.layout()
@@ -79,6 +85,11 @@ def _patched_init_ui(self: ManagerWidget) -> None:
     export_all_btn.setToolTip("将数据库中所有 K 线数据导出为 CSV 文件（每只股票一个文件）")
     export_all_btn.clicked.connect(lambda: _export_all(self))
     hbox.addWidget(export_all_btn)
+
+    constituents_btn = QtWidgets.QPushButton("成分股管理")
+    constituents_btn.setToolTip("管理指数成分股：从 TuShare 拉取沪深300/中证500等成分股数据")
+    constituents_btn.clicked.connect(lambda: _open_constituents_dialog(self))
+    hbox.addWidget(constituents_btn)
 
     # 设置右键菜单和双击事件（替代行内按钮，大幅提升性能）
     self.tree.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)

@@ -7,6 +7,7 @@ quant_research/model/kline_feature_presets.py
 from .kline_feature_model import KLineFeatureDefinition, KLineFeatureType, FeatureComplexity
 from .kline_feature_extended import EXTENDED_KLINE_FEATURES
 from .kline_feature_extended2 import EXTENDED_KLINE_FEATURES_2
+from .kline_feature_volume_price import VOLUME_PRICE_FEATURES
 
 
 # ========================================================================
@@ -236,6 +237,7 @@ PRESET_KLINE_FEATURES = {}
 PRESET_KLINE_FEATURES.update(BASE_KLINE_FEATURES)
 PRESET_KLINE_FEATURES.update(EXTENDED_KLINE_FEATURES)
 PRESET_KLINE_FEATURES.update(EXTENDED_KLINE_FEATURES_2)
+PRESET_KLINE_FEATURES.update(VOLUME_PRICE_FEATURES)
 
 
 # ========================================================================
