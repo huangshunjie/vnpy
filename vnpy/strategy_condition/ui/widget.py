@@ -1714,7 +1714,11 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         else:
             start_dt = datetime(1990, 1, 1)
 
+        _loaded_count = 0
         for sym in symbols:
+            _loaded_count += 1
+            if _loaded_count % 10 == 0:
+                QtWidgets.QApplication.processEvents()
             try:
                 parts    = sym.split(".")
                 code     = parts[0]
