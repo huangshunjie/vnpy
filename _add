@@ -1,0 +1,52 @@
+"""为交易所筛选添加更新时间显示"""
+
+file_path = "vnpy/strategy_condition/ui/widget.py"
+
+# 读取文件
+with open(file_path, "r", encoding="utf-8") as f:
+    content = f.read()
+
+# 在_set_exchange_pool方法中,第1576行之后添加更新时间显示
+# 原代码:
+#     self._pool_edit.setPlainText("\n".join(symbols))
+# 新代码:
+#     self._pool_edit.setPlainText("\n".join(symbols))
+#     # 显示股票池数量和更新时间
+#     from vnpy.trader import stock_pool
+#     update_time = stock_pool.get_pool_update_time()
+#     time_str = f" (更新: {update_time})" if update_time else ""
+#     self._pool_count_lbl.setText(f"{name or exchange_key} - {len(symbols)}只{time_str}")
+
+old_code = '''            symbols = get_symbols_by_exchange(exchange_key)
+            if symbols:
+                self._current_pool_name = name or exchange_key
+                self._pool_edit.setPlainText("\\n".join(symbols))
+            else:'''
+
+new_code = '''            symbols = get_symbols_by_exchange(exchange_key)
+            if symbols:
+                self._current_pool_name = name or exchange_key
+                self._pool_edit.setPlainText("\\n".join(symbols))
+                # 显示股票池数量和更新时间
+                from vnpy.trader import stock_pool
+                update_time = stock_pool.get_pool_update_time()
+                time_str = f" (更新: {update_time})" if update_time else ""
+                self._pool_count_lbl.setText(f"{name or exchange_key} - {len(symbols)}只{time_str}")
+            else:'''
+
+if old_code in content:
+    content = content.replace(old_code, new_code)
+    print("✓ 已添加交易所筛选的更新时间显示")
+else:
+    print("✗ 未找到匹配的代码块")
+    print("\n尝试查找相似代码...")
+    # 显示相关区域的代码
+    lines = content.split('\n')
+    for i, line in enumerate(lines[1570:1580], start=1571):
+        print(f"{i}: {line}")
+
+# 写回文件
+with open(file_path, "w", encoding="utf-8") as f:
+    f.write(content)
+
+print(f"\n完成! 文件已更新: {file_path}")

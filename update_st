@@ -1,0 +1,92 @@
+# -*- coding: utf-8 -*-
+"""
+使用TuShare快速获取真实股票列表并更新缓存
+"""
+import json
+from pathlib import Path
+from datetime import datetime
+
+print("正在从TuShare获取股票列表...")
+
+try:
+    import tushare as ts
+    
+    # 从vnpy配置读取token
+    from vnpy.trader.setting import SETTINGS
+    token = SETTINGS.get("datafeed.token", "")
+    
+    if not token:
+        print("[ERROR] 未找到TuShare token!")
+        print("请在VeighNa中配置TuShare token")
+        exit(1)
+    
+    # 初始化
+    ts.set_token(token)
+    pro = ts.pro_api()
+    
+    print("[OK] TuShare连接成功")
+    print("正在获取股票列表...")
+    
+    # 获取所有股票
+    stock_pool = set()
+    
+    # 沪深股票
+    df = pro.stock_basic(exchange='', list_status='L', fields='ts_code')
+    for code in df['ts_code']:
+        # 转换格式: 600000.SH -> 600000.SSE
+        symbol, exchange = code.split('.')
+        if exchange == 'SH':
+            stock_pool.add(f"{symbol}.SSE")
+        elif exchange == 'SZ':
+            stock_pool.add(f"{symbol}.SZSE")
+    
+    print(f"[OK] 获取了 {len(stock_pool)} 只A股")
+    
+    # 北交所
+    try:
+        df_bse = pro.bak_basic(fields='ts_code')
+        for code in df_bse['ts_code']:
+            symbol = code.split('.')[0]
+            stock_pool.add(f"{symbol}.BSE")
+        print(f"[OK] 加上北交所，共 {len(stock_pool)} 只")
+    except:
+        print("[WARN] 北交所数据获取失败，跳过")
+    
+    # 保存缓存
+    cache_dir = Path.home() / ".vnpy" / "stock_pool"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / "symbols_cache.json"
+    
+    data = {
+        "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "count": len(stock_pool),
+        "symbols": sorted(stock_pool),
+        "source": "TuShare",
+        "note": "从TuShare获取的真实股票列表"
+    }
+    
+    with open(cache_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    
+    print(f"\n[OK] 缓存已更新")
+    print(f"  文件: {cache_file}")
+    print(f"  总数: {len(stock_pool)}")
+    
+    # 统计
+    sse_count = len([s for s in stock_pool if '.SSE' in s])
+    szse_count = len([s for s in stock_pool if '.SZSE' in s])
+    bse_count = len([s for s in stock_pool if '.BSE' in s])
+    
+    print(f"  沪市: {sse_count}")
+    print(f"  深市: {szse_count}")
+    print(f"  北交所: {bse_count}")
+    print("\n现在重启vnpy，数量应该准确了！")
+    
+except ImportError:
+    print("[ERROR] 未安装tushare")
+    print("请运行: pip install tushare")
+    
+except Exception as e:
+    print(f"\n[ERROR] {e}")
+    import traceback
+    traceback.print_exc()

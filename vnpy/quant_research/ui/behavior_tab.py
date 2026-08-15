@@ -40,6 +40,7 @@ from PySide6.QtGui import QFont, QColor
 
 
 
+from vnpy.trader import stock_pool
 from ..engine import ResearchEngine
 
 from ..model.kline_event_model import EventSamplingRule
@@ -535,8 +536,8 @@ class BehaviorResearchTab(QWidget):
         self._logic_op = "AND"
 
         self._init_ui()
-        
-        
+
+
 
     def _init_ui(self):
 
@@ -2253,15 +2254,10 @@ class BehaviorResearchTab(QWidget):
                     self._pool_edit.setPlainText("\n".join(_POOL_CSI500_FALLBACK))
 
                 else:
-
                     QMessageBox.information(
-
                         self, "提示",
-
                         f"尚无 {index_code} 的成分股缓存数据。\n"
-
                         "请在数据管理 App 的「成分股管理」中先更新。"
-
                     )
 
             return
@@ -2366,14 +2362,16 @@ class BehaviorResearchTab(QWidget):
         if symbols:
 
             self._pool_edit.setPlainText("\n".join(symbols))
-            self._pool_count_lbl.setText(f"{self._current_pool_name} - {len(symbols)} 只")
+            update_time = stock_pool.get_pool_update_time()
+            time_str = f" (更新: {update_time})" if update_time else ""
+            self._pool_count_lbl.setText(f"{self._current_pool_name} - {len(symbols)} 只{time_str}")
 
         else:
 
             self._pool_edit.setPlainText("")
 
             from PySide6.QtWidgets import QMessageBox
-        
+
             QMessageBox.warning(self, "筛选结果", f"未找到 '{label}' 的股票数据")
 
 
@@ -2394,9 +2392,16 @@ class BehaviorResearchTab(QWidget):
         count = len(self._get_pool_symbols())
         name = getattr(self, '_current_pool_name', '')
         if name:
-            self._pool_count_lbl.setText(f"{name} - {count} 只")
+            update_time = stock_pool.get_pool_update_time()
+            time_str = f" (更新: {update_time})" if update_time else ""
+            self._pool_count_lbl.setText(f"{name} - {count} 只{time_str}")
         else:
-            self._pool_count_lbl.setText(f"{count} 只")
+
+            update_time = stock_pool.get_pool_update_time()
+
+            time_str = f" (更新: {update_time})" if update_time else ""
+
+            self._pool_count_lbl.setText(f"{count} 只{time_str}")
 
 
 

@@ -1,0 +1,79 @@
+"""诊断创业板按钮问题"""
+import sys
+
+print("=" * 60)
+print("诊断创业板按钮")
+print("=" * 60)
+
+# 1. 测试导入
+print("\n1. 测试导入...")
+try:
+    from vnpy.trader.stock_pool import get_symbols_by_board
+    print("   [OK] 成功导入 get_symbols_by_board")
+except Exception as e:
+    print(f"   [ERROR] 导入失败: {e}")
+    sys.exit(1)
+
+# 2. 测试创业板数据
+print("\n2. 测试创业板数据...")
+try:
+    symbols = get_symbols_by_board("创业板")
+    print(f"   [OK] 创业板股票数量: {len(symbols)}")
+    if symbols:
+        print(f"   示例: {list(symbols)[:10]}")
+    else:
+        print("   [WARNING] 创业板无数据！")
+        print("   可能原因:")
+        print("   - 数据库中没有30开头的股票")
+        print("   - 需要通过数据管理器下载创业板历史数据")
+except Exception as e:
+    print(f"   [ERROR] 查询失败: {e}")
+    import traceback
+    traceback.print_exc()
+
+# 3. 测试其他板块
+print("\n3. 测试其他板块...")
+boards = ["沪主板", "科创板", "深主板", "北交所"]
+for board in boards:
+    try:
+        symbols = get_symbols_by_board(board)
+        print(f"   {board}: {len(symbols)} stocks")
+    except Exception as e:
+        print(f"   {board}: ERROR - {e}")
+
+# 4. 检查数据库
+print("\n4. 检查数据库...")
+try:
+    from vnpy.trader.database import get_database
+    from vnpy.trader.constant import Interval
+    
+    db = get_database()
+    overview = db.get_bar_overview()
+    
+    # 统计各个前缀的股票数量
+    prefix_count = {}
+    for o in overview:
+        if o.interval == Interval.DAILY:
+            prefix = o.symbol[:2]
+            prefix_count[prefix] = prefix_count.get(prefix, 0) + 1
+    
+    print("   股票代码前缀统计:")
+    for prefix in sorted(prefix_count.keys()):
+        print(f"     {prefix}xxxx: {prefix_count[prefix]} stocks")
+    
+    # 特别检查30开头（创业板）
+    cyb_count = prefix_count.get("30", 0)
+    if cyb_count == 0:
+        print("\n   [WARNING] 数据库中没有30开头的股票（创业板）！")
+        print("   请通过数据管理器下载创业板股票的历史K线数据")
+    else:
+        print(f"\n   [OK] 创业板股票: {cyb_count} 只")
+        
+except Exception as e:
+    print(f"   [ERROR] 数据库检查失败: {e}")
+    import traceback
+    traceback.print_exc()
+
+print("\n" + "=" * 60)
+print("诊断完成")
+print("=" * 60)

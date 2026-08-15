@@ -43,6 +43,20 @@ class ScanEngine:
 
     # ── 截面扫描（实时选股） ──────────────────────────────────────────
 
+    def _group_conditions_by_scope(self, node: ConditionNode) -> Dict[str, list]:
+        groups = {"all": [], "daily": [], "minute": []}
+        for cond in node.all_conditions():
+            scope = getattr(cond, "interval_scope", "all") or "all"
+            if scope not in groups:
+                scope = "all"
+            groups[scope].append(cond)
+        return groups
+
+    def _is_layered_strategy(self, strategy: Strategy) -> bool:
+        buy_groups = self._group_conditions_by_scope(strategy.buy_tree)
+        sell_groups = self._group_conditions_by_scope(strategy.sell_tree)
+        return bool(buy_groups["daily"] or buy_groups["minute"] or sell_groups["daily"] or sell_groups["minute"])
+
     def scan(self, symbols: List[str], strategy: Strategy,
              n_bars: int = 300,
              _bars_dict: Optional[Dict[str, list]] = None) -> SignalBatch:

@@ -17,6 +17,14 @@ from ..core.condition_tree import ConditionNode
 from ..core.strategy import Strategy, StrategyMeta, StrategyParams
 
 
+def _layered_buy(filter_node: ConditionNode, trigger_node: ConditionNode) -> ConditionNode:
+    return ConditionNode.and_node(filter_node, trigger_node, label="买入条件")
+
+
+def _layered_sell(risk_node: ConditionNode, exit_node: ConditionNode) -> ConditionNode:
+    return ConditionNode.or_node(risk_node, exit_node, label="卖出条件")
+
+
 def template_trend_pullback() -> Strategy:
     """
     趋势回踩策略
@@ -24,10 +32,16 @@ def template_trend_pullback() -> Strategy:
     SELL: 追踪止盈 OR 固定止损 OR 最大持仓
     """
     buy = ConditionNode.and_node(
-        ConditionNode.leaf(cond_weekly_ma_slope(13, 5, 0.0,  weight=1.5)),
-        ConditionNode.leaf(cond_pullback_from_high(20, -10.0, -2.0, weight=1.2)),
-        ConditionNode.leaf(cond_macd_golden(weight=1.0)),
-        ConditionNode.leaf(cond_volume_price_up(20, 1.5, 1.0, weight=1.0)),
+        ConditionNode.and_node(
+            ConditionNode.leaf(cond_weekly_ma_slope(13, 5, 0.0,  weight=1.5)),
+            ConditionNode.leaf(cond_pullback_from_high(20, -10.0, -2.0, weight=1.2)),
+            label="日线过滤层",
+        ),
+        ConditionNode.or_node(
+            ConditionNode.leaf(cond_macd_golden(weight=1.0)),
+            ConditionNode.leaf(cond_volume_price_up(20, 1.5, 1.0, weight=1.0)),
+            label="分钟触发层",
+        ),
         label="趋势回踩买入",
     )
     sell = ConditionNode.or_node(
@@ -59,9 +73,15 @@ def template_breakout() -> Strategy:
     SELL: 止损 OR 跌破MA20 OR 最大持仓
     """
     buy = ConditionNode.and_node(
-        ConditionNode.leaf(cond_new_high_n(20, weight=1.5)),
-        ConditionNode.leaf(cond_volume_ratio(20, 1.8, weight=1.2)),
-        ConditionNode.leaf(cond_ma_alignment([5, 10, 20, 60], weight=1.0)),
+        ConditionNode.and_node(
+            ConditionNode.leaf(cond_new_high_n(20, weight=1.5)),
+            ConditionNode.leaf(cond_ma_alignment([5, 10, 20, 60], weight=1.0)),
+            label="日线过滤层",
+        ),
+        ConditionNode.or_node(
+            ConditionNode.leaf(cond_volume_ratio(20, 1.8, weight=1.2)),
+            label="分钟触发层",
+        ),
         label="突破买入",
     )
     sell = ConditionNode.or_node(
@@ -93,10 +113,16 @@ def template_strong_stock() -> Strategy:
     SELL: 追踪止盈 OR 止损 OR MACD死叉 OR 最大持仓
     """
     buy = ConditionNode.and_node(
-        ConditionNode.leaf(cond_limit_up_count(20, 2, weight=2.0)),
-        ConditionNode.leaf(cond_kline_strength(0.5, weight=1.5)),
-        ConditionNode.leaf(cond_ma_slope(20, 10, 0.1, weight=1.0)),
-        ConditionNode.leaf(cond_rsi_range(14, 40.0, 80.0, weight=0.8)),
+        ConditionNode.and_node(
+            ConditionNode.leaf(cond_limit_up_count(20, 2, weight=2.0)),
+            ConditionNode.leaf(cond_kline_strength(0.5, weight=1.5)),
+            label="日线过滤层",
+        ),
+        ConditionNode.or_node(
+            ConditionNode.leaf(cond_ma_slope(20, 10, 0.1, weight=1.0)),
+            ConditionNode.leaf(cond_rsi_range(14, 40.0, 80.0, weight=0.8)),
+            label="分钟触发层",
+        ),
         label="强势股买入",
     )
     sell = ConditionNode.or_node(

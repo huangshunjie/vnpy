@@ -1,0 +1,111 @@
+# -*- coding: utf-8 -*-
+"""诊断为什么找不到股票数据"""
+import sys
+import io
+
+# 修复Windows控制台编码问题
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
+print("=" * 60)
+print("诊断股票数据加载问题")
+print("=" * 60)
+
+# 1. 检查数据库管理器
+print("\n[1] 检查数据库...")
+try:
+    from vnpy.trader.database import get_database
+    db = get_database()
+    print(f"[OK] 数据库类型: {type(db).__name__}")
+except Exception as e:
+    print(f"[ERROR] 数据库错误: {e}")
+    sys.exit(1)
+
+# 2. 检查数据库是否有 get_bar_overview 方法
+print("\n[2] 检查数据库方法...")
+try:
+    if hasattr(db, 'get_bar_overview'):
+        print("[OK] 数据库支持 get_bar_overview()")
+        overview = db.get_bar_overview()
+        print(f"[OK] 数据库中共有 {len(overview)} 个股票合约")
+        
+        # 统计各交易所股票数量
+        sse_count = sum(1 for k in overview.keys() if 'SSE' in str(k))
+        szse_count = sum(1 for k in overview.keys() if 'SZSE' in str(k))
+        
+        print(f"[INFO] 沪市(SSE)股票: {sse_count} 只")
+        print(f"[INFO] 深市(SZSE)股票: {szse_count} 只")
+        
+        if sse_count == 0 and szse_count == 0:
+            print("\n[WARNING] 数据库中没有A股数据！")
+            print("[解决方案] 请先通过【数据管理器】下载股票历史K线数据")
+            sys.exit(0)
+            
+        # 显示示例
+        examples = list(overview.keys())[:5]
+        print(f"[示例] {examples}")
+    else:
+        print("[WARNING] 数据库不支持 get_bar_overview() 方法")
+        print("[INFO] 尝试其他查询方式...")
+        
+except Exception as e:
+    print(f"[ERROR] 查询失败: {e}")
+    import traceback
+    traceback.print_exc()
+
+# 3. 测试 stock_pool 的查询
+print("\n[3] 测试 stock_pool.py 查询...")
+try:
+    from vnpy.trader.stock_pool import _query_database_sync
+    from vnpy.trader.constant import Exchange
+    
+    print("[INFO] 查询深市(SZSE)股票...")
+    szse_symbols = _query_database_sync(Exchange.SZSE)
+    print(f"[结果] 深市股票: {len(szse_symbols)} 只")
+    if szse_symbols:
+        print(f"[示例] {list(szse_symbols)[:10]}")
+    
+    print("\n[INFO] 查询沪市(SSE)股票...")
+    sse_symbols = _query_database_sync(Exchange.SSE)
+    print(f"[结果] 沪市股票: {len(sse_symbols)} 只")
+    if sse_symbols:
+        print(f"[示例] {list(sse_symbols)[:10]}")
+        
+    if not szse_symbols and not sse_symbols:
+        print("\n[ERROR] 未找到任何股票数据！")
+        print("[原因] 数据库中没有下载过股票K线数据")
+        print("[解决] 请先使用【数据管理器】下载历史K线数据")
+        
+except Exception as e:
+    print(f"[ERROR] 查询失败: {e}")
+    import traceback
+    traceback.print_exc()
+
+# 4. 检查缓存文件
+print("\n[4] 检查缓存文件...")
+try:
+    from pathlib import Path
+    cache_dir = Path.home() / ".vntrader"
+    cache_file = cache_dir / "symbols_cache.json"
+    
+    if cache_file.exists():
+        import json
+        with open(cache_file, 'r', encoding='utf-8') as f:
+            cache_data = json.load(f)
+        
+        symbols = cache_data.get('symbols', set())
+        print(f"[OK] 找到缓存文件: {cache_file}")
+        print(f"[INFO] 缓存的股票数: {len(symbols)}")
+        
+        if len(symbols) > 0:
+            print(f"[示例] {list(symbols)[:10]}")
+    else:
+        print(f"[INFO] 缓存文件不存在: {cache_file}")
+        print("[INFO] 首次使用时会自动创建")
+        
+except Exception as e:
+    print(f"[ERROR] 检查缓存失败: {e}")
+
+# 5. 总结
+print("\n" + "=" * 60)
+print("诊断完成")
+print("=" * 60)

@@ -1,0 +1,56 @@
+# -*- coding: utf-8 -*-
+"""
+优化stock_pool.py，使用快速SQL查询代替get_bar_overview()
+"""
+import sys
+sys.path.insert(0, r'c:\Users\11229\Documents\GitHub\vnpy')
+
+from vnpy.trader.stock_pool import StockPool
+from vnpy.trader.constant import Exchange
+from vnpy.trader.database import get_database
+
+# 创建优化的查询方法
+def get_symbols_by_exchange_fast(exchange: Exchange) -> list[str]:
+    """
+    快速查询指定交易所的所有股票代码
+    使用DISTINCT避免全表扫描
+    """
+    db = get_database()
+    
+    # 直接访问底层数据库进行优化查询
+    try:
+        import vnpy_sqlite.sqlite_database as sqlite_module
+        DbBarData = sqlite_module.DbBarData
+        
+        # 使用DISTINCT symbol查询，避免COUNT(*)全表扫描
+        query = (DbBarData
+                .select(DbBarData.symbol)
+                .where(DbBarData.exchange == exchange.value)
+                .distinct())
+        
+        symbols = [row.symbol for row in query]
+        return symbols
+        
+    except Exception as e:
+        print(f"快速查询失败: {e}")
+        return []
+
+# 打patch到StockPool类
+原始方法 = StockPool.get_symbols_by_exchange
+
+def 优化的get_symbols_by_exchange(self, exchange: Exchange) -> list[str]:
+    """使用优化的快速查询"""
+    return get_symbols_by_exchange_fast(exchange)
+
+StockPool.get_symbols_by_exchange = 优化的get_symbols_by_exchange
+
+print("=" * 70)
+print("已成功patch StockPool.get_symbols_by_exchange方法")
+print("=" * 70)
+
+# 测试
+print("\n测试快速查询:")
+symbols = get_symbols_by_exchange_fast(Exchange.SSE)
+print(f"沪市股票数量: {len(symbols)}")
+if symbols:
+    print(f"前10个: {symbols[:10]}")

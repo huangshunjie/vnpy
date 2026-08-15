@@ -87,6 +87,7 @@ class ConditionMonitorEngine:
         warmup: int = 60,
         buy_dates: Optional[List[str]] = None,
         sell_dates: Optional[List[str]] = None,
+        inject_buy_signals: bool = True,
     ) -> List[ConditionSnapshot]:
         """
         为指定股票的K线序列生成全部 ConditionSnapshot。
@@ -157,7 +158,7 @@ class ConditionMonitorEngine:
         injected_buy = 0
         injected_sell = 0
         try:
-            for dt_str in (buy_dates or []):
+            for dt_str in ((buy_dates or []) if inject_buy_signals else []):
                 bar_idx = self._find_bar_index_by_dt_str(bars, dt_str)
                 if bar_idx is None:
                     print(

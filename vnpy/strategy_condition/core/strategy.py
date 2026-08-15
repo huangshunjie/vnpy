@@ -122,6 +122,29 @@ class Strategy:
     def sell_condition_count(self) -> int:
         return self.sell_tree.count_leaves()
 
+    def validate_interval_scopes(self) -> List[str]:
+        """校验买卖树中的条件周期约束，返回警告列表。"""
+        warnings: List[str] = []
+        for side_name, tree in (("买入", self.buy_tree), ("卖出", self.sell_tree)):
+            has_daily = False
+            has_minute = False
+            for cond in tree.all_conditions():
+                scope = getattr(cond, "interval_scope", "all")
+                if scope == "daily":
+                    has_daily = True
+                elif scope == "minute":
+                    has_minute = True
+            if has_daily and has_minute:
+                warnings.append(f"{side_name}条件同时包含日线和分钟线条件，建议拆成“日线过滤层 + 分钟触发层”。")
+        return warnings
+
+    def summary_with_scope(self) -> str:
+        warnings = self.validate_interval_scopes()
+        base = self.summary()
+        if warnings:
+            return base + "\n\n[周期校验]\n" + "\n".join(f"- {w}" for w in warnings)
+        return base
+
     # ── JSON 序列化 ───────────────────────────────────────────────────
 
     def to_dict(self) -> Dict[str, Any]:
@@ -180,10 +203,20 @@ class Strategy:
 # ── 工厂函数：从空模板快速创建策略 ────────────────────────────────────
 
 def empty_strategy(name: str = "新策略") -> Strategy:
-    """创建空策略模板（AND 买入树 + OR 卖出树）"""
+    """创建分层空策略模板。"""
+    buy_tree = ConditionNode.and_node(
+        ConditionNode(op=NodeOp.AND, label="日线过滤层"),
+        ConditionNode(op=NodeOp.OR, label="分钟触发层"),
+        label="买入条件",
+    )
+    sell_tree = ConditionNode.or_node(
+        ConditionNode(op=NodeOp.AND, label="日线风控层"),
+        ConditionNode(op=NodeOp.OR, label="分钟退出层"),
+        label="卖出条件",
+    )
     return Strategy(
         meta=      StrategyMeta(name=name),
-        buy_tree=  ConditionNode(op=NodeOp.AND, label="买入条件"),
-        sell_tree= ConditionNode(op=NodeOp.OR,  label="卖出条件"),
+        buy_tree=  buy_tree,
+        sell_tree= sell_tree,
         params=    StrategyParams(),
     )

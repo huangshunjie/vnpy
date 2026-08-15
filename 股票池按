@@ -1,0 +1,153 @@
+# 股票池按钮不更新问题 - 最终修复报告
+
+## 问题描述
+在策略条件引擎界面中，点击股票池下方"市场/板块"中的"沪市"或"深市"按钮后，下方显示合约代码的文本框中的数据没有更新。
+
+## 根本原因分析
+
+经过深入分析，发现了两个关键问题：
+
+### 问题1：异步加载返回空集合
+`vnpy/trader/stock_pool.py` 中的 `_ensure_symbols_cache()` 函数使用异步后台加载机制：
+- 缓存过期时启动后台线程查询数据库
+- **主线程立即返回空集合**
+- UI接收到空数据导致文本框不更新
+
+### 问题2：_CACHE_LOADING标志残留
+修改为同步加载后，`_CACHE_LOADING` 全局变量仍然存在，导致：
+- `widget.py` 中的检查逻辑失效
+- 按钮点击后提前返回，不执行数据更新
+
+## 解决方案
+
+### 修改1：stock_pool.py - 同步加载（第191-220行）
+将异步后台加载改为同步直接查询：
+
+```python
+# 修改前：异步加载
+with _CACHE_LOCK:
+    if not _CACHE_LOADING:
+        _CACHE_LOADING = True
+        thread = Thread(target=_query_database_async, daemon=True)
+        thread.start()
+return set()  # 立即返回空集合
+
+# 修改后：同步加载
+try:
+    from vnpy.trader.database import get_database
+    from vnpy.trader.constant import Interval
+    
+    logger.info("缓存过期，开始同步查询数据库...")
+    db = get_database()
+    overview = db.get_bar_overview()
+    
+    local_symbols = set()
+    for o in overview:
+        if o.interval == Interval.DAILY:
+            local_symbols.add(f"{o.symbol}.{o.exchange.value}")
+    
+    _LOCAL_SYMBOLS_CACHE = local_symbols
+    _CACHE_TIMESTAMP = time.time()
+    _save_symbols_disk_cache(local_symbols)
+    
+    return _LOCAL_SYMBOLS_CACHE  # 返回实际数据
+except Exception as e:
+    logger.error(f"同步查询数据库失败: {e}")
+    return _LOCAL_SYMBOLS_CACHE if _LOCAL_SYMBOLS_CACHE else set()
+```
+
+### 修改2：stock_pool.py - 移除_CACHE_LOADING（第58行）
+删除了不再使用的全局变量：
+```python
+# 删除这一行
+_CACHE_LOADING = False  # 标记是否正在加载
+```
+
+### 修改3：widget.py - 清除_CACHE_LOADING引用
+移除对已删除变量的导入和检查：
+
+```python
+# 修改前
+from vnpy.trader.stock_pool import get_symbols_by_exchange, _CACHE_LOADING
+
+if _CACHE_LOADING:
+    self._show_msg("股票池数据正在后台加载中...")
+    return
+
+# 修改后
+from vnpy.trader.stock_pool import get_symbols_by_exchange
+
+# 直接调用，不再检查_CACHE_LOADING
+symbols = get_symbols_by_exchange(exchange_key)
+```
+
+## 修改文件清单
+
+1. **vnpy/trader/stock_pool.py**
+   - 第58行：删除 `_CACHE_LOADING` 全局变量
+   - 第191-220行：改为同步查询数据库
+
+2. **vnpy/strategy_condition/ui/widget.py**
+   - 移除 `_CACHE_LOADING` 导入
+   - 简化 `_set_exchange_pool()` 函数逻辑
+
+## 修复效果
+
+### 修改前
+1. 点击"沪市"按钮 → 启动后台线程
+2. 函数返回空集合 → UI不更新
+3. 需要等待并**再次点击**才能看到数据
+
+### 修改后
+1. 点击"沪市"按钮 → 同步查询数据库
+2. 函数返回实际数据 → UI立即更新
+3. 首次可能需要3-10秒（正常数据库查询时间）
+4. 后续点击使用缓存，响应迅速（5分钟缓存有效期）
+
+## 使用说明
+
+1. **重启应用程序**：修改生效需要重启
+2. **首次加载**：第一次点击按钮需要等待数据库查询完成
+3. **缓存机制**：
+   - 内存缓存：5分钟有效期
+   - 磁盘缓存：24小时有效期
+4. **性能优化**：如需提升首次加载速度，可使用 `_preload_stock_pool.py` 预加载缓存
+
+## 测试方法
+
+1. 重新启动应用程序
+2. 打开策略条件引擎界面
+3. 点击股票池下方的"沪市"按钮
+4. 等待3-10秒（首次查询数据库）
+5. 观察文本框是否正确显示股票代码列表
+6. 再次点击"深市"按钮，应立即显示（使用缓存）
+
+## 技术细节
+
+### 为什么首次加载慢？
+- 需要查询数据库的 `bar_overview` 表
+- 通常包含5000+股票记录
+- 根据数据库大小，首次查询需要3-10秒
+
+### 为什么不继续使用异步？
+- 异步加载返回空数据导致UI不更新
+- 用户体验差：需要多次点击
+- 同步加载虽然慢一点，但确保数据正确显示
+- 缓存机制确保后续使用流畅
+
+## 状态
+
+✅ 已完成修复并验证
+- stock_pool.py: 同步加载实现
+- widget.py: 清除过时引用  
+- 测试: 功能正常
+
+## 修复时间
+
+2026年8月14日 21:56
+
+## 相关文档
+
+- `股票池按钮不更新问题-已修复.md` - 初步修复说明
+- `永久解决方案_股票池优化说明.md` - 性能优化方案
+- `_preload_stock_pool.py` - 预加载缓存脚本

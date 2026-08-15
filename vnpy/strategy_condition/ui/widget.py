@@ -577,6 +577,7 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         pool_hdr.addStretch()
         left_col.addLayout(pool_hdr)
         self._current_pool_name = ""
+        self._pool_last_update = ""
 
         # ━━ 市场/板块 ━━
         left_col.addWidget(_lbl("市场/板块", _MUT, 11))
@@ -1565,13 +1566,31 @@ class StrategyConditionWidget(QtWidgets.QWidget):
             self._pool_count_lbl.setText("数据源：VeighNa 数据库")
 
     def _set_exchange_pool(self, exchange_key: str, name: str = "") -> None:
-        """按交易所筛选股票"""
+        """按交易所筛选股票（优化：友好的加载提示）"""
         try:
-            from vnpy.trader.stock_pool import get_symbols_by_exchange
+            from vnpy.trader.stock_pool import get_symbols_by_exchange, is_cache_loading
+            
             symbols = get_symbols_by_exchange(exchange_key)
             if symbols:
                 self._current_pool_name = name or exchange_key
                 self._pool_edit.setPlainText("\n".join(symbols))
+                # 显示股票池数量和更新时间
+                from vnpy.trader import stock_pool
+                update_time = stock_pool.get_pool_update_time()
+                time_str = f" (更新: {update_time})" if update_time else ""
+                self._pool_count_lbl.setText(f"{name or exchange_key} - {len(symbols)}只{time_str}")
+            else:
+                # 区分：后台加载中 vs 真的没有数据
+                if is_cache_loading():
+                    self._show_msg(
+                        f"正在后台加载 {name or exchange_key} 的股票数据...\n\n"
+                        "⏳ 首次加载需要几秒钟，请稍后再次点击按钮"
+                    )
+                else:
+                    self._show_msg(
+                        f"{name or exchange_key} 没有找到任何股票数据\n\n"
+                        "请先通过【数据管理器】下载历史K线数据。"
+                    )
         except Exception as e:
             self._show_msg(f"交易所筛选失败: {e}")
 
@@ -1596,6 +1615,10 @@ class StrategyConditionWidget(QtWidgets.QWidget):
                 symbols = get_index_symbols(index_code)
                 if symbols:
                     self._pool_edit.setPlainText("\n".join(symbols))
+                    from vnpy.trader import stock_pool
+                    update_time = stock_pool.get_pool_update_time()
+                    time_str = f" (更新: {update_time})" if update_time else ""
+                    self._pool_count_lbl.setText(f"{name} - {len(symbols)}只{time_str}")
                     return
             except Exception:
                 pass

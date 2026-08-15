@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict
 
-from ..constant import ConditionCategory, ConditionIndicator
+from ..constant import ConditionCategory, ConditionIndicator, INDICATOR_INTERVAL_SCOPE
 
 
 @dataclass
@@ -18,6 +18,11 @@ class Condition:
     weight:    float          = 1.0
     label:     str            = ""
     enabled:   bool           = True
+    interval_scope: str       = "all"
+
+    def __post_init__(self) -> None:
+        if not self.interval_scope or self.interval_scope == "all":
+            self.interval_scope = INDICATOR_INTERVAL_SCOPE.get(self.indicator, "all")
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -27,17 +32,20 @@ class Condition:
             "weight":    self.weight,
             "label":     self.label,
             "enabled":   self.enabled,
+            "interval_scope": self.interval_scope,
         }
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Condition":
+        indicator = ConditionIndicator(d["indicator"])
         return cls(
             category=  ConditionCategory(d["category"]),
-            indicator= ConditionIndicator(d["indicator"]),
+            indicator= indicator,
             params=    d.get("params", {}),
             weight=    d.get("weight", 1.0),
             label=     d.get("label", ""),
             enabled=   d.get("enabled", True),
+            interval_scope=d.get("interval_scope", INDICATOR_INTERVAL_SCOPE.get(indicator, "all")),
         )
 
     def display_name(self) -> str:

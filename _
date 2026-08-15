@@ -1,0 +1,79 @@
+"""直接修复股票池同步加载问题"""
+import sys
+import io
+
+# 设置输出编码
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
+# 读取文件
+with open("vnpy/trader/stock_pool.py", "r", encoding="utf-8") as f:
+    content = f.read()
+
+# 定义要替换的旧代码
+old_code = '''    # 3. 磁盘缓存也过期了，启动后台查询（避免卡死）
+    with _CACHE_LOCK:
+        if not _CACHE_LOADING:
+            _CACHE_LOADING = True
+            logger.info("磁盘缓存不可用，启动后台线程查询数据库...")
+            thread = Thread(target=_query_database_async, daemon=True)
+            thread.start()
+    
+    # 先返回空集合或旧缓存，避免UI卡死
+    if _LOCAL_SYMBOLS_CACHE is not None:
+        logger.warning("使用过期的内存缓存，后台正在更新...")
+        return _LOCAL_SYMBOLS_CACHE
+    else:
+        logger.warning("缓存不可用，返回空集合，后台正在查询数据库...")
+        return set()'''
+
+# 定义新代码
+new_code = '''    # 3. 磁盘缓存也过期了，同步查询数据库（修复UI不更新问题）
+    try:
+        from vnpy.trader.database import get_database
+        from vnpy.trader.constant import Interval
+        
+        logger.info("缓存过期，开始同步查询数据库...")
+        start_time = time.time()
+        
+        db = get_database()
+        overview = db.get_bar_overview()
+        
+        local_symbols = set()
+        for o in overview:
+            if o.interval == Interval.DAILY:
+                local_symbols.add(f"{o.symbol}.{o.exchange.value}")
+        
+        elapsed = time.time() - start_time
+        logger.info(f"数据库查询完成: {len(local_symbols)} symbols, 耗时 {elapsed:.1f}秒")
+        
+        _LOCAL_SYMBOLS_CACHE = local_symbols
+        _CACHE_TIMESTAMP = time.time()
+        _save_symbols_disk_cache(local_symbols)
+        
+        return _LOCAL_SYMBOLS_CACHE
+    except Exception as e:
+        logger.error(f"同步查询数据库失败: {e}")
+        # 如果有旧缓存，返回旧缓存
+        if _LOCAL_SYMBOLS_CACHE is not None:
+            logger.warning("使用过期的内存缓存")
+            return _LOCAL_SYMBOLS_CACHE
+        return set()'''
+
+# 执行替换
+if old_code in content:
+    content = content.replace(old_code, new_code)
+    print("[OK] 成功找到并替换代码")
+    
+    # 保存文件
+    with open("vnpy/trader/stock_pool.py", "w", encoding="utf-8") as f:
+        f.write(content)
+    
+    print("\n[OK] 修复已应用到 vnpy/trader/stock_pool.py")
+    print("\n修改内容：")
+    print("  - 将异步后台加载改为同步加载")
+    print("  - 现在点击按钮后会立即查询数据库并更新UI")
+    print("  - 首次加载可能需要几秒钟，但能正确显示数据")
+    print("\n请重新启动应用程序测试！")
+else:
+    print("[ERROR] 未找到要替换的代码")
+    print("可能文件已被修改，请手动检查")

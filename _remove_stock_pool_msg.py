@@ -1,0 +1,28 @@
+"""移除股票池选择时的提示对话框"""
+
+file_path = "vnpy/strategy_condition/ui/widget.py"
+
+# 读取文件
+with open(file_path, "r", encoding="utf-8") as f:
+    lines = f.readlines()
+
+# 移除第1577行的提示
+# 注意: Python的索引从0开始,所以第1577行是索引1576
+if len(lines) > 1576:
+    line_1577 = lines[1576]
+    if 'self._show_msg(f"已加载 {len(symbols)} 只股票")' in line_1577:
+        print(f"找到第1577行: {line_1577.strip()}")
+        # 删除这一行
+        del lines[1576]
+        print("✓ 已删除第1577行")
+    else:
+        print(f"第1577行内容不匹配: {line_1577.strip()}")
+        print("跳过删除")
+else:
+    print(f"文件只有 {len(lines)} 行,无法处理第1577行")
+
+# 写回文件
+with open(file_path, "w", encoding="utf-8") as f:
+    f.writelines(lines)
+
+print(f"\n完成! 文件已更新: {file_path}")

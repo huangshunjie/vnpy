@@ -281,33 +281,51 @@ class MinuteImportDialog(QtWidgets.QDialog):
 
         # --- 数据目录选择 ---
         dir_group = QtWidgets.QGroupBox("数据源")
-        dir_layout = QtWidgets.QFormLayout(dir_group)
+        dir_layout = QtWidgets.QVBoxLayout(dir_group)
 
-        self._edit_root = QtWidgets.QLineEdit(r"D:\vnpy_data_min")
-        btn_browse = QtWidgets.QPushButton("浏览...")
-        btn_browse.clicked.connect(self._on_browse)
-
-        root_hbox = QtWidgets.QHBoxLayout()
-        root_hbox.addWidget(self._edit_root, 1)
-        root_hbox.addWidget(btn_browse)
-        dir_layout.addRow("数据包根目录：", root_hbox)
-
-        # 年份选择
-        self._combo_year = QtWidgets.QComboBox()
-        self._combo_year.setMinimumWidth(100)
-        dir_layout.addRow("年份：", self._combo_year)
+        # 直接选择包含 CSV 的目录
+        dir_row = QtWidgets.QHBoxLayout()
+        dir_row.addWidget(QtWidgets.QLabel("CSV 文件目录："))
+        self._edit_csv_dir = QtWidgets.QLineEdit(r"D:\vnpy_data_min\60分钟(2000-2025)\60分钟")
+        self._edit_csv_dir.setMinimumWidth(350)
+        btn_browse = QtWidgets.QPushButton("📁 浏览...")
+        btn_browse.clicked.connect(self._on_browse_csv_dir)
+        dir_row.addWidget(self._edit_csv_dir, 1)
+        dir_row.addWidget(btn_browse)
+        dir_layout.addLayout(dir_row)
 
         # 频率选择
+        freq_row = QtWidgets.QHBoxLayout()
+        freq_row.addWidget(QtWidgets.QLabel("K线频率："))
         self._combo_freq = QtWidgets.QComboBox()
         self._combo_freq.addItems(["1分钟", "5分钟", "15分钟", "30分钟", "60分钟"])
-        dir_layout.addRow("K线频率：", self._combo_freq)
+        self._combo_freq.setCurrentText("60分钟")
+        freq_row.addWidget(self._combo_freq)
+        freq_row.addStretch()
+        
+        # 扫描按钮
+        btn_scan = QtWidgets.QPushButton("🔍 扫描文件")
+        btn_scan.clicked.connect(self._on_scan_files)
+        freq_row.addWidget(btn_scan)
+        dir_layout.addLayout(freq_row)
 
         layout.addWidget(dir_group)
 
-        # 刷新年份列表
-        btn_refresh = QtWidgets.QPushButton("刷新目录")
-        btn_refresh.clicked.connect(self._refresh_years)
-        dir_layout.addRow("", btn_refresh)
+        # --- 文件预览区域 ---
+        preview_group = QtWidgets.QGroupBox("文件预览")
+        preview_layout = QtWidgets.QVBoxLayout(preview_group)
+        
+        self._file_list = QtWidgets.QListWidget()
+        self._file_list.setMaximumHeight(180)
+        self._file_list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        preview_layout.addWidget(self._file_list)
+        
+        # 统计信息
+        self._stats_label = QtWidgets.QLabel("点击「扫描文件」开始")
+        self._stats_label.setStyleSheet("color: #666; font-size: 11px;")
+        preview_layout.addWidget(self._stats_label)
+        
+        layout.addWidget(preview_group)
 
         # --- 进度区域 ---
         self._progress_bar = QtWidgets.QProgressBar()
@@ -321,9 +339,10 @@ class MinuteImportDialog(QtWidgets.QDialog):
 
         # --- 按钮 ---
         btn_layout = QtWidgets.QHBoxLayout()
-        self._btn_start = QtWidgets.QPushButton("开始导入")
+        self._btn_start = QtWidgets.QPushButton("▶ 开始导入")
         self._btn_start.clicked.connect(self._on_start)
-        self._btn_stop = QtWidgets.QPushButton("停止")
+        self._btn_start.setEnabled(False)  # 初始禁用，扫描后启用
+        self._btn_stop = QtWidgets.QPushButton("⏹ 停止")
         self._btn_stop.setEnabled(False)
         self._btn_stop.clicked.connect(self._on_stop)
         btn_close = QtWidgets.QPushButton("关闭")
@@ -335,40 +354,112 @@ class MinuteImportDialog(QtWidgets.QDialog):
         btn_layout.addWidget(btn_close)
         layout.addLayout(btn_layout)
 
-        # 初始化年份
-        self._refresh_years()
+        # 存储扫描到的文件
+        self._scanned_files: list[Path] = []
 
-    def _on_browse(self) -> None:
+    def _on_browse_csv_dir(self) -> None:
+        """浏览并选择包含 CSV 的目录。"""
+        current = self._edit_csv_dir.text()
         dir_path = QtWidgets.QFileDialog.getExistingDirectory(
-            self, "选择分钟线数据包根目录", self._edit_root.text()
+            self, "选择包含分钟线 CSV 的目录", current if Path(current).exists() else ""
         )
         if dir_path:
-            self._edit_root.setText(dir_path)
-            self._refresh_years()
+            self._edit_csv_dir.setText(dir_path)
+            # 自动扫描
+            self._on_scan_files()
 
-    def _refresh_years(self) -> None:
-        """扫描根目录下的年份子目录。"""
-        self._combo_year.clear()
-        root = Path(self._edit_root.text())
-        if not root.is_dir():
+    def _on_scan_files(self) -> None:
+        """扫描目录下的所有 CSV 文件并显示预览。"""
+        dir_path = Path(self._edit_csv_dir.text())
+        
+        if not dir_path.exists():
+            QtWidgets.QMessageBox.warning(
+                self, "目录不存在",
+                f"指定的目录不存在：\n{dir_path}"
+            )
             return
-        for item in sorted(root.iterdir()):
-            if item.is_dir() and item.name.isdigit():
-                self._combo_year.addItem(item.name)
+        
+        if not dir_path.is_dir():
+            QtWidgets.QMessageBox.warning(
+                self, "路径错误",
+                f"指定的路径不是目录：\n{dir_path}"
+            )
+            return
+        
+        self._log_text.clear()
+        self._log(f"正在扫描目录：{dir_path}")
+        
+        # 递归查找所有 CSV 文件
+        self._scanned_files = []
+        valid_files = []
+        invalid_files = []
+        
+        for csv_file in sorted(dir_path.rglob("*.csv")):
+            self._scanned_files.append(csv_file)
+            
+            # 尝试解析文件名
+            parsed = _parse_exchange_symbol(csv_file.name)
+            if parsed:
+                exchange, symbol = parsed
+                valid_files.append((csv_file, exchange, symbol))
+            else:
+                invalid_files.append(csv_file)
+        
+        # 更新文件列表
+        self._file_list.clear()
+        for csv_file, exchange, symbol in valid_files:
+            try:
+                rel_path = csv_file.relative_to(dir_path)
+            except ValueError:
+                rel_path = csv_file.name
+            item = QtWidgets.QListWidgetItem(
+                f"✓ {rel_path}  →  {exchange.value}.{symbol}"
+            )
+            item.setForeground(QtCore.Qt.GlobalColor.darkGreen)
+            self._file_list.addItem(item)
+        
+        for csv_file in invalid_files:
+            try:
+                rel_path = csv_file.relative_to(dir_path)
+            except ValueError:
+                rel_path = csv_file.name
+            item = QtWidgets.QListWidgetItem(f"✗ {rel_path}  (无法识别)")
+            item.setForeground(QtCore.Qt.GlobalColor.gray)
+            self._file_list.addItem(item)
+        
+        # 更新统计
+        total = len(self._scanned_files)
+        valid_count = len(valid_files)
+        invalid_count = len(invalid_files)
+        
+        self._stats_label.setText(
+            f"共找到 {total} 个文件：{valid_count} 个有效，{invalid_count} 个无法识别"
+        )
+        
+        self._log(f"扫描完成：{valid_count} 个有效文件")
+        if invalid_count > 0:
+            self._log(f"警告：{invalid_count} 个文件无法识别（文件名不符合规范）")
+        
+        # 启用导入按钮
+        if valid_count > 0:
+            self._btn_start.setEnabled(True)
+        else:
+            self._btn_start.setEnabled(False)
+            if total > 0:
+                QtWidgets.QMessageBox.information(
+                    self, "无有效文件",
+                    f"目录中没有找到符合命名规范的 CSV 文件。\n\n"
+                    f"文件名规则：{{交易所前缀}}{{股票代码}}.csv\n"
+                    f"例如：sz000001.csv, sh600000.csv, bj430047.csv"
+                )
 
     def _get_data_path(self) -> Path | None:
-        """根据当前选项组合完整的数据目录路径。"""
-        root = Path(self._edit_root.text())
-        year = self._combo_year.currentText()
-        freq = self._combo_freq.currentText()
+        """获取用户选择的 CSV 目录。"""
+        path = Path(self._edit_csv_dir.text())
+        if path.is_dir():
+            return path
+        return None
 
-        if not year or not freq:
-            return None
-
-        path = root / year / freq
-        if not path.is_dir():
-            return None
-        return path
 
     def _on_start(self) -> None:
         data_path = self._get_data_path()

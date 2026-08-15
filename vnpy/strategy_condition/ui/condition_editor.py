@@ -1552,7 +1552,8 @@ class ConditionTreeEditor(QtWidgets.QWidget):
         彻底避免对同一控件反复 clear() 导致的 Qt C++ 内部野指针崩溃。
         """
         qtree = _DraggableTreeWidget()
-        qtree.setHeaderHidden(True)
+        qtree.setHeaderHidden(False)
+        qtree.setHeaderLabel("条件树｜右键分组可修改 AND/OR、重命名、添加或删除")
         qtree.setStyleSheet(
             f"QTreeWidget{{background:{_PAN2};color:{_FG};"
             f"border:1px solid {_BORD};border-radius:4px;font-size:13px;}}"
@@ -1792,9 +1793,8 @@ class ConditionTreeEditor(QtWidgets.QWidget):
                        if node.recent_window > 0 else "末步不限")
             head = f"[顺序]  {display_label}  ({gap_txt}, {win_txt})"
         elif is_root:
-            # 根节点：如果设置了固定显示标签则使用，否则用节点自身 label
             root_label = self._root_display_label or display_label
-            head = f"{root_label}"
+            head = f"[{node.op.value}]  {root_label}"
         else:
             head = f"[{node.op.value}]  {display_label}"
         item = QtWidgets.QTreeWidgetItem([head])
@@ -1837,21 +1837,96 @@ class ConditionTreeEditor(QtWidgets.QWidget):
             f"QMenu::item:selected{{background:{_BLU};color:#1e1e2e;}}"
         )
         if node.op != NodeOp.LEAF:
-            menu.addAction("＋ 添加 AND 子树",
-                           lambda: self._add_op_node(node, NodeOp.AND))
-            menu.addAction("＋ 添加 OR 子树",
-                           lambda: self._add_op_node(node, NodeOp.OR))
-            menu.addAction("＋ 添加 顺序(SEQUENCE)子树",
-                           lambda: self._add_op_node(node, NodeOp.SEQUENCE))
+            logic_menu = menu.addMenu("修改分组逻辑")
+            for op, text in (
+                (NodeOp.AND, "设为 AND（全部满足）"),
+                (NodeOp.OR, "设为 OR（任一满足）"),
+                (NodeOp.NOT, "设为 NOT（条件取反）"),
+                (NodeOp.SEQUENCE, "设为 SEQUENCE（按顺序发生）"),
+            ):
+                action = logic_menu.addAction(text)
+                action.setCheckable(True)
+                action.setChecked(node.op == op)
+                action.triggered.connect(
+                    lambda _checked=False, n=node, target=op:
+                    self._change_node_op(n, target))
+
+            menu.addAction("重命名分组…",
+                           lambda: self._rename_group(node))
             menu.addSeparator()
+            menu.addAction("添加 AND 子组",
+                           lambda: self._add_op_node(node, NodeOp.AND))
+            menu.addAction("添加 OR 子组",
+                           lambda: self._add_op_node(node, NodeOp.OR))
+            menu.addAction("添加顺序子组",
+                           lambda: self._add_op_node(node, NodeOp.SEQUENCE))
+
+            parent = self._find_parent_node(node)
+            if parent is not None:
+                sibling_menu = menu.addMenu("添加同级分组")
+                sibling_menu.addAction(
+                    "AND 组", lambda: self._add_op_node(parent, NodeOp.AND))
+                sibling_menu.addAction(
+                    "OR 组", lambda: self._add_op_node(parent, NodeOp.OR))
+                sibling_menu.addAction(
+                    "顺序组", lambda: self._add_op_node(parent, NodeOp.SEQUENCE))
+            menu.addSeparator()
+
         if node.op == NodeOp.SEQUENCE:
-            menu.addAction("⚙ 配置顺序参数…",
+            menu.addAction("配置顺序参数…",
                            lambda: self._config_sequence(node))
             menu.addSeparator()
         if item.parent() is not None:
-            menu.addAction("🗑  删除此节点",
+            menu.addAction("删除此节点",
                            lambda: self._delete_node(node))
         menu.exec(self._qtree.viewport().mapToGlobal(pos))
+
+    def _find_parent_node(self, target: ConditionNode) -> Optional[ConditionNode]:
+        def _walk(parent: ConditionNode) -> Optional[ConditionNode]:
+            for child in parent.children:
+                if child is target:
+                    return parent
+                found = _walk(child)
+                if found is not None:
+                    return found
+            return None
+
+        if self._tree_data is None or target is self._tree_data:
+            return None
+        return _walk(self._tree_data)
+
+    def _change_node_op(self, node: ConditionNode, op: NodeOp) -> None:
+        if node.op == NodeOp.LEAF or node.op == op:
+            return
+        if op == NodeOp.NOT and len(node.children) > 1:
+            QtWidgets.QMessageBox.information(
+                self,
+                "NOT 分组限制",
+                "NOT 分组只能包含一个直接子节点。请先把多个条件放入一个 AND/OR 子组，再切换为 NOT。",
+            )
+            return
+        node.op = op
+        if op == NodeOp.SEQUENCE:
+            node.default_gap = node.default_gap or 10
+            node.recent_window = node.recent_window or 5
+        self._pending_select = node
+        self.load_tree(self._tree_data)
+        self.tree_changed.emit()
+
+    def _rename_group(self, node: ConditionNode) -> None:
+        current = node.label or "条件组"
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "重命名分组", "分组名称：",
+            QtWidgets.QLineEdit.EchoMode.Normal, current)
+        if not ok:
+            return
+        name = name.strip()
+        if not name or name == node.label:
+            return
+        node.label = name
+        self._pending_select = node
+        self.load_tree(self._tree_data)
+        self.tree_changed.emit()
 
     def _add_op_node(self, parent: ConditionNode, op: NodeOp) -> None:
         label = {NodeOp.AND: "条件组", NodeOp.OR: "条件组",

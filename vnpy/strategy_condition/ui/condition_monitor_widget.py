@@ -404,21 +404,19 @@ class ConditionWaveformView(QtWidgets.QWidget):
         return x_out, y_out
 
 
-class ConditionMonitorWidget(QtWidgets.QWidget):
-    """
-    条件监控主 Widget：上方 K 线图（复用 KlineViewTab）+ 下方条件波形图。
-    两区同步：X轴联动 + 十字竖线贯穿 + 滚轮同步缩放。
-    """
+class _PeriodMonitorPanel(QtWidgets.QWidget):
+    """单一周期的 K线、成交量和条件波形联动面板。"""
 
-    # 信号：诊断信息更新（两行文本），供外部 widget 显示
-    lifecycle_info_changed = QtCore.Signal(str, str)  # (line1, line2)
+    lifecycle_info_changed = QtCore.Signal(str, str)
+    cursor_datetime_changed = QtCore.Signal(object)
 
-    def __init__(self, parent=None):
+    def __init__(self, period_title: str, parent=None):
         super().__init__(parent)
+        self._period_title = period_title
         self._current_symbol: str = ""
         self._current_snapshots: List[ConditionSnapshot] = []
+        self._current_bars: list = []
         self._synced: bool = False
-
         self._init_ui()
 
     def _init_ui(self):
@@ -553,7 +551,9 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
             status = f"持仓中(第{hold_bars}根)"
         else:
             status = "未持仓"
-        line1 = f"[{dt_str}] {status}  信号:{sig or '无'}"
+        line1 = (
+            f"[{self._period_title}] [{dt_str}] "
+            f"{status}  信号:{sig or '无'}")
 
         # 第二行：卖出条件触发摘要
         fired = []
@@ -567,6 +567,7 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
             line2 = "卖出条件均未触发"
 
         self.lifecycle_info_changed.emit(line1, line2)
+        self.cursor_datetime_changed.emit(snapshot.dt)
 
     # ── 公开接口 ──────────────────────────────────────────────────
 
@@ -586,6 +587,7 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
         """
         self._current_symbol = symbol
         self._current_snapshots = snapshots
+        self._current_bars = list(bars or [])
         self._synced = False
 
         if bars:
@@ -640,9 +642,10 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
             # 更新标题
             self._kline_tab._title_lbl.setText(
                 f"<b style='color:#89b4fa'>{symbol}</b>  "
+                f"<span style='color:#cba6f7'>{self._period_title}</span>  "
                 f"<span style='color:#6c7086'>({len(bars)} bars)</span>")
 
-            dates = [str(s.dt)[:10] for s in snapshots]
+            dates = [str(s.dt)[:16] for s in snapshots]
             self._waveform_view.load_data(
                 snapshots, dates,
                 buy_indices=buy_indices,
@@ -665,3 +668,154 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
             # 数据加载后，自动显示最后一根 bar 的 Lifecycle 诊断
             last_bar_idx = snapshots[-1].bar_index
             self._update_lifecycle_for_bar(last_bar_idx)
+
+    def show_empty(self, symbol: str, message: str) -> None:
+        self._current_symbol = symbol
+        self._current_snapshots = []
+        self._current_bars = []
+        self._kline_tab._chart.clear()
+        self._kline_tab._title_lbl.setText(
+            f"<b style='color:#89b4fa'>{symbol}</b>  "
+            f"<span style='color:#f38ba8'>{message}</span>")
+        self._waveform_view._show_empty_hint(message)
+
+    def focus_datetime(self, dt, completed_daily: bool = False):
+        """定位目标时刻；日线联动只使用目标日期前的完整日线。"""
+        if dt is None or not self._current_bars:
+            return None
+        target_index = None
+        for index, bar in enumerate(self._current_bars):
+            bar_dt = getattr(bar, "dt", getattr(bar, "datetime", None))
+            if bar_dt is None:
+                continue
+            if completed_daily and bar_dt.date() >= dt.date():
+                continue
+            if bar_dt <= dt:
+                target_index = index
+        if target_index is None:
+            return None
+        chart = self._kline_tab._chart
+        chart._vline.setPos(target_index)
+        chart._vline.setVisible(True)
+        self._waveform_view.set_vline_pos(target_index)
+        target_bar = self._current_bars[target_index]
+        return getattr(target_bar, "dt", getattr(target_bar, "datetime", None))
+
+
+class ConditionMonitorWidget(QtWidgets.QWidget):
+    """日线、分钟和双周期条件监控容器。"""
+
+    lifecycle_info_changed = QtCore.Signal(str, str)
+    minute_interval_changed = QtCore.Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._init_ui()
+
+    def _init_ui(self) -> None:
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        toolbar = QtWidgets.QWidget()
+        toolbar.setFixedHeight(38)
+        toolbar.setStyleSheet(
+            f"background:{_BG};border-bottom:1px solid {_BORD};")
+        row = QtWidgets.QHBoxLayout(toolbar)
+        row.setContentsMargins(10, 4, 10, 4)
+        row.addWidget(QtWidgets.QLabel("显示模式"))
+        self._mode_cb = QtWidgets.QComboBox()
+        self._mode_cb.addItems(["日线", "分钟", "双周期"])
+        self._mode_cb.setCurrentText("双周期")
+        self._mode_cb.currentTextChanged.connect(self._apply_mode)
+        row.addWidget(self._mode_cb)
+        row.addSpacing(12)
+        row.addWidget(QtWidgets.QLabel("分钟周期"))
+        self._minute_cb = QtWidgets.QComboBox()
+        for value, label in (
+            ("1m", "1分钟"), ("5m", "5分钟"), ("15m", "15分钟"),
+            ("30m", "30分钟"), ("1h", "60分钟")):
+            self._minute_cb.addItem(label, value)
+        self._minute_cb.setCurrentIndex(1)
+        self._minute_cb.currentIndexChanged.connect(
+            lambda _idx: self.minute_interval_changed.emit())
+        row.addWidget(self._minute_cb)
+        row.addStretch()
+        self._status_lbl = QtWidgets.QLabel("等待加载双周期数据")
+        self._status_lbl.setStyleSheet(f"color:{_MUT};")
+        row.addWidget(self._status_lbl)
+        layout.addWidget(toolbar)
+
+        self._daily_panel = _PeriodMonitorPanel("日线过滤 / 日线风控")
+        self._minute_panel = _PeriodMonitorPanel("分钟触发 / 分钟退出")
+        self._daily_panel.lifecycle_info_changed.connect(
+            self.lifecycle_info_changed.emit)
+        self._minute_panel.lifecycle_info_changed.connect(
+            self.lifecycle_info_changed.emit)
+        self._minute_panel.cursor_datetime_changed.connect(
+            self._sync_daily_cursor)
+
+        self._period_splitter = QtWidgets.QSplitter(
+            QtCore.Qt.Orientation.Vertical)
+        self._period_splitter.setHandleWidth(6)
+        self._period_splitter.addWidget(self._daily_panel)
+        self._period_splitter.addWidget(self._minute_panel)
+        self._period_splitter.setStretchFactor(0, 1)
+        self._period_splitter.setStretchFactor(1, 1)
+        layout.addWidget(self._period_splitter, 1)
+        self._apply_mode("双周期")
+
+    def _sync_daily_cursor(self, minute_dt) -> None:
+        daily_dt = self._daily_panel.focus_datetime(
+            minute_dt, completed_daily=True)
+        if daily_dt is None:
+            self._status_lbl.setText(
+                f"分钟 {str(minute_dt)[:16]} / 无可用的上一完整日线")
+            return
+        self._status_lbl.setText(
+            f"分钟 {str(minute_dt)[:16]} / 引用日线 {str(daily_dt)[:10]}")
+
+    def minute_interval_key(self) -> str:
+        return str(self._minute_cb.currentData() or "5m")
+
+    def minute_interval_text(self) -> str:
+        return self._minute_cb.currentText()
+
+    def _apply_mode(self, mode: str) -> None:
+        self._daily_panel.setVisible(mode in ("日线", "双周期"))
+        self._minute_panel.setVisible(mode in ("分钟", "双周期"))
+        self._minute_cb.setEnabled(mode != "日线")
+
+    def load_layered_data(
+        self, symbol: str,
+        daily_snapshots: List[ConditionSnapshot], daily_bars: list,
+        minute_snapshots: List[ConditionSnapshot], minute_bars: list,
+        buy_dates: list = None, sell_dates: list = None,
+    ) -> None:
+        buy_dates = buy_dates or []
+        sell_dates = sell_dates or []
+        if daily_bars:
+            self._daily_panel.load_snapshots(
+                symbol, daily_snapshots, daily_bars, buy_dates, sell_dates)
+        else:
+            self._daily_panel.show_empty(symbol, "缺少日线数据")
+        if minute_bars:
+            self._minute_panel.load_snapshots(
+                symbol, minute_snapshots, minute_bars,
+                buy_dates, sell_dates)
+        else:
+            self._minute_panel.show_empty(
+                symbol, f"缺少{self.minute_interval_text()}数据")
+        self._status_lbl.setText(
+            f"日线 {len(daily_bars)} 根 / "
+            f"{self.minute_interval_text()} {len(minute_bars)} 根")
+
+    def load_snapshots(self, symbol: str,
+                       snapshots: List[ConditionSnapshot], bars: list = None,
+                       buy_dates: list = None,
+                       sell_dates: list = None) -> None:
+        """兼容旧调用：单周期数据在日线面板显示。"""
+        self._daily_panel.load_snapshots(
+            symbol, snapshots, bars, buy_dates, sell_dates)
+        self._mode_cb.setCurrentText("日线")
+        self._status_lbl.setText(f"单周期 {len(bars or [])} 根")

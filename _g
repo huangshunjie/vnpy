@@ -1,0 +1,56 @@
+# -*- coding: utf-8 -*-
+"""
+一次性生成股票池缓存文件
+运行此脚本后，股票池将秒开
+"""
+import json
+from pathlib import Path
+
+# 沪深交易所股票代码规则
+stock_pool = []
+
+# 沪市主板 600000-603999
+for i in range(600000, 604000):
+    stock_pool.append(f"{i}.SSE")
+
+# 沪市科创板 688000-688999
+for i in range(688000, 689000):
+    stock_pool.append(f"{i}.SSE")
+
+# 深市主板 000001-002999  
+for i in range(1, 3000):
+    stock_pool.append(f"{i:06d}.SZSE")
+
+# 深市创业板 300001-301999
+for i in range(300001, 302000):
+    stock_pool.append(f"{i}.SZSE")
+
+# 北交所 430000-499999, 800000-899999
+for i in range(430000, 500000):
+    stock_pool.append(f"{i}.BSE")
+for i in range(800000, 900000):
+    stock_pool.append(f"{i}.BSE")
+
+# 保存到缓存文件
+cache_dir = Path.home() / ".vnpy" / "stock_pool"
+cache_dir.mkdir(parents=True, exist_ok=True)
+cache_file = cache_dir / "symbols_cache.json"
+
+from datetime import datetime
+data = {
+    "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    "count": len(stock_pool),
+    "symbols": sorted(stock_pool),
+    "note": "手动生成的完整股票池，包含沪深北所有可能的代码"
+}
+
+with open(cache_file, "w", encoding="utf-8") as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
+
+print(f"✓ 已生成股票池缓存")
+print(f"  文件位置: {cache_file}")
+print(f"  股票数量: {len(stock_pool)}")
+print(f"  沪市: {len([s for s in stock_pool if '.SSE' in s])}")
+print(f"  深市: {len([s for s in stock_pool if '.SZSE' in s])}")
+print(f"  北交所: {len([s for s in stock_pool if '.BSE' in s])}")
+print("\n现在重启vnpy，股票池按钮应该秒开！")

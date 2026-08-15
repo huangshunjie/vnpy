@@ -1,0 +1,55 @@
+# -*- coding: utf-8 -*-
+"""检查数据库驱动实际使用的路径"""
+import sys
+import io
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
+from vnpy.trader.database import get_database
+import inspect
+
+print("=" * 60)
+print("数据库驱动检查")
+print("=" * 60)
+
+db = get_database()
+print(f"\n数据库类型: {type(db)}")
+print(f"模块: {type(db).__module__}")
+
+# 检查所有属性
+print(f"\n数据库对象的所有属性:")
+for attr in sorted(dir(db)):
+    if not attr.startswith('_'):
+        try:
+            val = getattr(db, attr)
+            if not callable(val):
+                print(f"  {attr}: {val}")
+        except:
+            pass
+
+# 检查engine
+if hasattr(db, 'engine'):
+    print(f"\nEngine对象:")
+    print(f"  URL: {db.engine.url}")
+    print(f"  Driver: {db.engine.driver}")
+    
+# 尝试查询
+print(f"\n尝试查询数据:")
+try:
+    overview = db.get_bar_overview()
+    print(f"  查询成功！合约数量: {len(overview)}")
+    
+    if len(overview) > 0:
+        # 显示前5个
+        print(f"\n  前5个合约:")
+        for i, key in enumerate(list(overview.keys())[:5]):
+            print(f"    {i+1}. {key.symbol}.{key.exchange.value}")
+    else:
+        print(f"  [警告] 数据库为空！")
+        
+except Exception as e:
+    print(f"  [错误] 查询失败: {e}")
+    import traceback
+    traceback.print_exc()
+
+print("\n" + "=" * 60)
