@@ -33,22 +33,15 @@ from .sell_signal_lifecycle import (
 from ..constant import DecisionResult, RejectReason
 
 
-# 纯技术面卖出条件（不依赖真实持仓上下文）：
-# 这些条件在监控波形中独立展示，无论是否处于回测虚拟持仓区间。
+# 纯技术面卖出指标：无需持仓上下文也能给出有意义信号的指标。
+# 这些条件在监控波形中独立展示，无论是否处于持仓区间。
 #
-# 说明：
-#   - MA_BREAK_DOWN / MACD_DEATH_SELL：本身就是纯 K 线技术判断。
-#   - STOP_LOSS / TRAILING_STOP：ConditionEngine._dispatch() 内已提供
-#     "近似技术面"实现——用最近 60 根 K 线的低点作入场价近似、高点作
-#     峰值近似，从而在无持仓上下文时也能给出直观信号。
-#
-# 剩余卖出条件（TAKE_PROFIT / MAX_HOLD_DAYS）没有可脱离持仓的语义，
-# 继续走 eval_exit，无持仓时保持 False。
+# 注意：STOP_LOSS / TRAILING_STOP / TAKE_PROFIT / MAX_HOLD_DAYS 已移除，
+#       因为它们必须依赖持仓状态（买入价、持仓天数），无持仓时不应显示信号。
+#       只有在有持仓时，这些条件才会基于真实买入价进行评估。
 _PURE_TECHNICAL_EXIT_INDICATORS = {
     ConditionIndicator.MA_BREAK_DOWN,
     ConditionIndicator.MACD_DEATH_SELL,
-    ConditionIndicator.TRAILING_STOP,
-    ConditionIndicator.STOP_LOSS,
     ConditionIndicator.TIME_OF_DAY,      # 时间过滤：纯K线时间戳判断，不依赖持仓
 }
 

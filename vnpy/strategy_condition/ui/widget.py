@@ -1469,12 +1469,105 @@ class StrategyConditionWidget(QtWidgets.QWidget):
             ce = self._engine.condition_engine if self._engine else ConditionEngine()
             se = ScanEngine(ce)
             warmup = max(60, self._strategy.params.min_bars)
-            # 判断是否为分钟级K线（非日线即为日内，需启用T+1规则）
+
+            # 获取UI设置的周期（作为锚定周期）
             bt_idx = self._interval_cb.currentIndex()
-            bt_interval, _ = self._interval_options[bt_idx]
-            is_intraday = (bt_interval != Interval.DAILY)
+            anchor_interval, _ = self._interval_options[bt_idx]
+
+            # === 自动多周期数据加载 ===
+            from ..core.mtf_auto_loader import (
+                analyze_strategy_data_requirements,
+                get_date_range_from_anchor_bars
+            )
+
+            # 分析策略需要的所有周期
+            req = analyze_strategy_data_requirements(
+                strategy=self._strategy,
+                anchor_interval=anchor_interval,
+                anchor_bar_count=n_bars
+            )
+
+            # 如果策略需要多个周期，自动加载并设置MTF Buffer
+            if len(req.required_intervals) > 1:
+                from ..data.mtf_candle_buffer import MultiTimeframeCandleBuffer
+                mtf_buffer = MultiTimeframeCandleBuffer()
+
+                # 从锚定周期数据提取日期范围
+                if bars_dict and any(bars_dict.values()):
+                    first_symbol = next(
+                        iter([s for s, b in bars_dict.items() if b])
+                    )
+                    anchor_bars = bars_dict[first_symbol]
+                    start_date, end_date = get_date_range_from_anchor_bars(
+                        anchor_bars
+                    )
+
+                    # 为每只股票加载所需的其他周期数据
+                    _mtf_load_count = 0
+                    for symbol in loaded:
+                        _mtf_load_count += 1
+                        if _mtf_load_count % 5 == 0:
+                            QtWidgets.QApplication.processEvents()
+                        # 加载锚定周期到MTF Buffer
+                        mtf_buffer.inject(
+                            symbol, anchor_interval, bars_dict[symbol]
+                        )
+                        # 加载其他周期
+                        for interval in req.required_intervals:
+                            if interval != anchor_interval:
+                                other_bars = self._load_bars_by_date_range(
+                                    symbol, interval, start_date, end_date
+                                )
+                                if other_bars:
+                                    mtf_buffer.inject(
+                                        symbol, interval, other_bars
+                                    )
+
+                    # 设置MTF Buffer到scan engine
+                    se.set_mtf_buffer(mtf_buffer)
+
+            # 使用自动确定的执行周期
+            execution_interval = req.execution_interval
+            is_intraday = (execution_interval != Interval.DAILY)
+
+            # ═══ 多周期关键逻辑：主循环数据需要是 execution_interval 的数据 ═══
+            # 当 execution_interval(分钟) != anchor_interval(日线) 时：
+            #   - bars_dict 替换为分钟线数据（主循环遍历分钟K线）
+            #   - 日线数据已在 MTF Buffer 中，供日线条件查询
+            #   - 日线条件评估时：历史完整日线 + 当天虚拟日线(close=当前分钟close)
+            if (execution_interval != anchor_interval
+                    and len(req.required_intervals) > 1):
+                # 加载 execution_interval 的数据作为主循环
+                exec_bars_dict = {}
+                if bars_dict and any(bars_dict.values()):
+                    first_sym = next(s for s, b in bars_dict.items() if b)
+                    anchor_bars_tmp = bars_dict[first_sym]
+                    sd, ed = get_date_range_from_anchor_bars(anchor_bars_tmp)
+                    _exec_cnt = 0
+                    for sym in loaded:
+                        _exec_cnt += 1
+                        if _exec_cnt % 5 == 0:
+                            QtWidgets.QApplication.processEvents()
+                        eb = self._load_bars_by_date_range(
+                            sym, execution_interval, sd, ed
+                        )
+                        exec_bars_dict[sym] = eb if eb else []
+                    exec_loaded = [s for s, b in exec_bars_dict.items() if b]
+                    if exec_loaded:
+                        bars_dict = exec_bars_dict
+                        loaded = exec_loaded
+                        print(f"[SCE] 多周期回测：主循环使用 {execution_interval.value} "
+                              f"数据({len(loaded)}只, 首只{len(bars_dict[loaded[0]])}根)")
+                    else:
+                        # 无分钟数据，降级为锚定周期
+                        print(f"[SCE] 警告：无 {execution_interval.value} 数据，"
+                              f"降级为 {anchor_interval.value}")
+                        execution_interval = anchor_interval
+                        is_intraday = False
+
             batch  = se.backtest(loaded, self._strategy, bars_dict,
-                                 warmup=warmup, is_intraday=is_intraday)
+                                 warmup=warmup, is_intraday=is_intraday,
+                                 execution_interval=execution_interval)
             self._bt_view.load_batch(batch)
             self._signal_view.load_batch(batch)
             self._tab.setCurrentIndex(3)
@@ -1558,8 +1651,14 @@ class StrategyConditionWidget(QtWidgets.QWidget):
     def _on_pool_changed(self) -> None:
         n = len(self._get_pool_symbols())
         name = getattr(self, '_current_pool_name', '')
+        try:
+            from vnpy.trader import stock_pool
+            update_time = stock_pool.get_pool_update_time()
+            time_str = f" (更新: {update_time})" if update_time else ""
+        except Exception:
+            time_str = ""
         if name:
-            self._pool_count_lbl.setText(f"{name} - {n} 只")
+            self._pool_count_lbl.setText(f"{name} - {n} 只{time_str}")
         elif n > 0:
             self._pool_count_lbl.setText(f"数据源：VeighNa 数据库 - {n} 只")
         else:
@@ -1766,6 +1865,47 @@ class StrategyConditionWidget(QtWidgets.QWidget):
                 bars_dict[sym] = []
 
         return bars_dict
+
+    def _load_bars_by_date_range(self, symbol: str, interval, 
+                                 start_date, end_date) -> list:
+        """
+        按日期范围加载指定周期的K线数据
+        
+        Args:
+            symbol: 股票代码（如 "600000.SSE"）
+            interval: K线周期（Interval枚举）
+            start_date: 起始日期（date对象）
+            end_date: 结束日期（date对象）
+            
+        Returns:
+            K线列表（_BarAdapter包装后的）
+        """
+        from vnpy.trader.database import get_database
+        from vnpy.trader.constant import Exchange
+        from datetime import datetime
+        
+        db = get_database()
+        parts = symbol.split(".")
+        code = parts[0]
+        exch_str = parts[1] if len(parts) > 1 else ""
+        
+        try:
+            exchange = Exchange(exch_str)
+        except Exception:
+            exchange = Exchange.SSE if code.startswith("6") else Exchange.SZSE
+        
+        start_dt = datetime.combine(start_date, datetime.min.time())
+        end_dt = datetime.combine(end_date, datetime.max.time())
+        
+        try:
+            raw = db.load_bar_data(
+                symbol=code, exchange=exchange,
+                interval=interval,
+                start=start_dt, end=end_dt
+            )
+            return [_BarAdapter(b) for b in raw] if raw else []
+        except Exception:
+            return []
 
     def _update_estimated_start_date(self) -> None:
         """根据当前K线数量和周期计算预估起始日期并显示"""

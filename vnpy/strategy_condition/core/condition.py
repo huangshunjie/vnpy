@@ -4,8 +4,9 @@ strategy_condition/core/condition.py
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
+from vnpy.trader.constant import Interval
 from ..constant import ConditionCategory, ConditionIndicator, INDICATOR_INTERVAL_SCOPE
 
 
@@ -19,13 +20,14 @@ class Condition:
     label:     str            = ""
     enabled:   bool           = True
     interval_scope: str       = "all"
+    data_interval: Optional[Interval] = None  # 多周期支持：指定该条件使用哪个周期的数据
 
     def __post_init__(self) -> None:
         if not self.interval_scope or self.interval_scope == "all":
             self.interval_scope = INDICATOR_INTERVAL_SCOPE.get(self.indicator, "all")
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "category":  self.category.value,
             "indicator": self.indicator.value,
             "params":    self.params,
@@ -34,10 +36,23 @@ class Condition:
             "enabled":   self.enabled,
             "interval_scope": self.interval_scope,
         }
+        # 保存 data_interval（如果有）
+        if self.data_interval is not None:
+            d["data_interval"] = self.data_interval.value
+        return d
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Condition":
         indicator = ConditionIndicator(d["indicator"])
+        
+        # 读取 data_interval（向后兼容）
+        data_interval = None
+        if "data_interval" in d and d["data_interval"]:
+            try:
+                data_interval = Interval(d["data_interval"])
+            except:
+                pass  # 忽略无效值
+        
         return cls(
             category=  ConditionCategory(d["category"]),
             indicator= indicator,
@@ -46,6 +61,7 @@ class Condition:
             label=     d.get("label", ""),
             enabled=   d.get("enabled", True),
             interval_scope=d.get("interval_scope", INDICATOR_INTERVAL_SCOPE.get(indicator, "all")),
+            data_interval=data_interval,
         )
 
     def display_name(self) -> str:

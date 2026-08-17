@@ -184,7 +184,7 @@ _COND_META = {
     # ── K线升级 ──
     ConditionIndicator.KLINE_YIN:         ("阴线",          cond_kline_yin,         {}),
     ConditionIndicator.KLINE_YANG:        ("阳线",          cond_kline_yang,        {}),
-    ConditionIndicator.KLINE_SHRINK_YIN:  ("缩量阴线",      cond_kline_shrink_yin,  {"vol_period":5}),
+    ConditionIndicator.KLINE_SHRINK_YIN:  ("缩量阴线",      cond_kline_shrink_yin,  {"vol_period":5, "vol_ratio":0.8}),
     ConditionIndicator.KLINE_VOL_YIN:     ("放量阴线",      cond_kline_volyin,      {}),
     ConditionIndicator.KLINE_LONG_LOWER:  ("长下影线",      cond_kline_long_lower,  {"min_ratio":2.0}),
     ConditionIndicator.KLINE_DOJI:        ("十字星",        cond_kline_doji,        {"max_body_ratio":0.1}),
@@ -495,11 +495,22 @@ _COND_HELP: dict = {
     ),
     ConditionIndicator.KLINE_SHRINK_YIN: (
         "缩量阴线",
-        "【功能】close<open 且 volume<MA(vol,5)。\n\n"
+        "【功能】close<open 且 volume < MA(vol, vol_period) × vol_ratio\n\n"
+        "【参数说明】\n"
+        "  · 均量周期(vol_period)：计算均量的天数(默认5，范围3~20)\n"
+        "  · 缩量比例(vol_ratio)：缩量阈值，当日量/均量上限(默认0.8，范围0.2~1.0)\n\n"
         "【核心含义】下跌但无卖压 = 惜售\n\n"
-        "【示例】强势股回调第3天，收小阴线\n"
+        "【计算示例】\n"
+        "  vol_period=5, vol_ratio=0.8\n"
+        "  5日均量=1000万，今日量=700万\n"
+        "  700/1000=0.7 < 0.8 → 缩量确认\n\n"
+        "【应用示例】强势股回调第3天，收小阴线\n"
         "  成交量仅为5日均量的50%\n"
         "  → 经典低吸买点\n\n"
+        "【调整建议】\n"
+        "  · vol_ratio=0.6：严格缩量，高质量信号\n"
+        "  · vol_ratio=0.8：适中要求，常规使用\n"
+        "  · vol_ratio=1.0：只要不放量即可\n\n"
         "【场景】低吸策略的关键K线形态"
     ),
     ConditionIndicator.KLINE_VOL_YIN: (
@@ -1360,6 +1371,33 @@ class ParamPanel(QtWidgets.QWidget):
         wsp.setStyleSheet(ss); wsp.valueChanged.connect(self._emit)
         self._widgets["weight"] = wsp; self._layout.addWidget(wsp)
 
+        # ── Phase 5: 多周期数据周期选择器 ──
+        self._layout.addWidget(_lbl("数据周期 data_interval", _MUT, 12))
+        interval_combo = QtWidgets.QComboBox()
+        interval_combo.addItem("默认（跟随策略）", "")
+        interval_combo.addItem("日线", "d")
+        interval_combo.addItem("周线", "w")
+        interval_combo.addItem("60分钟", "60m")
+        interval_combo.addItem("30分钟", "30m")
+        interval_combo.addItem("15分钟", "15m")
+        interval_combo.addItem("5分钟", "5m")
+        interval_combo.addItem("1分钟", "1m")
+        interval_combo.setStyleSheet(
+            f"QComboBox{{background:{_PAN2};color:{_FG};"
+            f"border:1px solid {_BORD};border-radius:4px;"
+            f"padding:3px 6px;font-size:13px;}}"
+            f"QComboBox::drop-down{{border:none;}}"
+            f"QComboBox QAbstractItemView{{background:{_PAN2};color:{_FG};"
+            f"selection-background-color:{_BLU};}}")
+        # 如果有已保存的 data_interval，恢复选中
+        saved_interval = (current_params or {}).get("_data_interval", "")
+        idx = interval_combo.findData(saved_interval)
+        if idx >= 0:
+            interval_combo.setCurrentIndex(idx)
+        interval_combo.currentIndexChanged.connect(self._emit)
+        self._widgets["_data_interval"] = interval_combo
+        self._layout.addWidget(interval_combo)
+
         # ── Insight 解读区域（内联渲染） ──
         self._render_insight_inline(indicator)
 
@@ -1368,7 +1406,9 @@ class ParamPanel(QtWidgets.QWidget):
     def get_params(self) -> dict:
         result = {}
         for key, w in self._widgets.items():
-            if isinstance(w, QtWidgets.QDoubleSpinBox):
+            if isinstance(w, QtWidgets.QComboBox):
+                result[key] = w.currentData()
+            elif isinstance(w, QtWidgets.QDoubleSpinBox):
                 result[key] = w.value()
             elif isinstance(w, QtWidgets.QSpinBox):
                 result[key] = w.value()
@@ -1764,7 +1804,15 @@ class ConditionTreeEditor(QtWidgets.QWidget):
             cond = node.condition
             name = cond.display_name() if cond else "?"
             cat  = cond.category      if cond else None
-            item = QtWidgets.QTreeWidgetItem([f"  {name}"])
+            
+            # 添加周期标签显示
+            display_text = f"  {name}"
+            if cond and hasattr(cond, 'data_interval') and cond.data_interval is not None:
+                interval_label = self._format_interval_label(cond.data_interval)
+                if interval_label:
+                    display_text = f"  {name} {interval_label}"
+            
+            item = QtWidgets.QTreeWidgetItem([display_text])
             item.setData(0, QtCore.Qt.ItemDataRole.UserRole, node)
             item.setForeground(0, QtGui.QColor(self._cat_color(cat)))
             # 叶节点：可拖动，不可接收放置
@@ -1775,28 +1823,29 @@ class ConditionTreeEditor(QtWidgets.QWidget):
             )
             return item
 
+        # ── 分组节点 ──
         op_colors = {NodeOp.AND: _GRN, NodeOp.OR: _YLW,
                      NodeOp.NOT: _RED, NodeOp.SEQUENCE: _MAV}
         is_root = (node is self._tree_data)
-        # SEQUENCE 节点在标签后追加间隔/窗口摘要，便于一眼看清配置
-        # 清理 label 中冗余的操作符名称（例如 "AND 条件组" → "条件组"）
-        display_label = node.label
-        for prefix in ("AND ", "OR ", "NOT "):
-            if display_label.startswith(prefix):
-                display_label = display_label[len(prefix):]
-                break
-
+        
+        # 只显示逻辑运算符，不显示描述性文本
+        # SEQUENCE 节点需要显示间隔/窗口配置信息
         if node.op == NodeOp.SEQUENCE:
             gap_txt = (f"间隔≤{node.default_gap}根"
                        if node.default_gap > 0 else "间隔不限")
             win_txt = (f"末步≤{node.recent_window}根内"
                        if node.recent_window > 0 else "末步不限")
-            head = f"[顺序]  {display_label}  ({gap_txt}, {win_txt})"
+            head = f"[SEQUENCE]  ({gap_txt}, {win_txt})"
         elif is_root:
-            root_label = self._root_display_label or display_label
-            head = f"[{node.op.value}]  {root_label}"
+            # 根节点可以显示自定义标签（如果有）
+            root_label = self._root_display_label
+            if root_label:
+                head = f"[{node.op.value}]  {root_label}"
+            else:
+                head = f"[{node.op.value}]"
         else:
-            head = f"[{node.op.value}]  {display_label}"
+            # 非根分组节点：只显示操作符
+            head = f"[{node.op.value}]"
         item = QtWidgets.QTreeWidgetItem([head])
         item.setData(0, QtCore.Qt.ItemDataRole.UserRole, node)
         item.setForeground(0, QtGui.QColor(op_colors.get(node.op, _FG)))
@@ -1821,6 +1870,22 @@ class ConditionTreeEditor(QtWidgets.QWidget):
         for child in node.children:
             item.addChild(self._build_qtree_item(child))
         return item
+
+    def _format_interval_label(self, interval) -> str:
+        """格式化周期为带颜色的标签文本"""
+        from vnpy.trader.constant import Interval
+        interval_map = {
+            Interval.DAILY: "日线",
+            Interval.HOUR: "60分钟",
+            Interval.MINUTE_30: "30分钟",
+            Interval.MINUTE_15: "15分钟",
+            Interval.MINUTE_5: "5分钟",
+            Interval.MINUTE: "1分钟",
+        }
+        label = interval_map.get(interval, "")
+        if not label:
+            label = interval.value if hasattr(interval, 'value') else str(interval)
+        return f"[{label}]"
 
     # ── 右键菜单 ──────────────────────────────────────────────────────
 

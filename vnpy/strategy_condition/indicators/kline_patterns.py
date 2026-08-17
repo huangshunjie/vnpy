@@ -12,37 +12,44 @@ def _calc_vol_ma(volumes: List[float], period: int = 5) -> float:
     return sum(volumes[-period:]) / period
 
 
-def check_kline_yin(closes: List[float], opens: List[float]) -> Tuple[bool, float]:
+def check_kline_yin(closes, opens) -> Tuple[bool, float]:
     """当日阴线: close< open"""
-    if not closes or not opens:
+    if len(closes) == 0 or len(opens) == 0:
         return False, 0.0
-    passed = closes[-1] < opens[-1]
+    passed = bool(closes[-1] < opens[-1])
     return passed, 1.0 if passed else 0.0
 
 
-def check_kline_yang(closes: List[float], opens: List[float]) -> Tuple[bool, float]:
+def check_kline_yang(closes, opens) -> Tuple[bool, float]:
     """当日阳线: close > open"""
-    if not closes or not opens:
+    if len(closes) == 0 or len(opens) == 0:
         return False, 0.0
-    passed = closes[-1] > opens[-1]
+    passed = bool(closes[-1] > opens[-1])
     return passed, 1.0 if passed else 0.0
 
 
 def check_kline_shrink_yin(closes: List[float], opens: List[float],
                            volumes: List[float],
-                           vol_period: int = 5) -> Tuple[bool, float]:
+                           vol_period: int = 5,
+                           max_vol_ratio: float = 1.0) -> Tuple[bool, float]:
     """
-    缩量阴线: close < open 且 volume < MA(volume, vol_period)
+    缩量阴线: close < open 且 volume < MA(volume, vol_period) * max_vol_ratio
+    
+    参数:
+        vol_period: 均量周期(默认5)
+        max_vol_ratio: 缩量比例阈值(默认1.0)，当日量/均量上限
     """
-    if not closes or not opens or len(volumes) < vol_period:
+    if len(closes) == 0 or len(opens) == 0 or len(volumes) < vol_period:
         return False, 0.0
     is_yin = closes[-1] < opens[-1]
     vol_ma = _calc_vol_ma(volumes[:-1], vol_period) if len(volumes) > vol_period else _calc_vol_ma(volumes, vol_period)
     if vol_ma <= 0:
         return False, 0.0
-    is_shrink = volumes[-1] < vol_ma
+    vol_ratio = volumes[-1] / vol_ma
+    is_shrink = vol_ratio < max_vol_ratio
     passed = is_yin and is_shrink
-    score = (1.0 - volumes[-1] / vol_ma) if passed else 0.0
+    # score: 缩量越明显分数越高
+    score = (1.0 - vol_ratio / max_vol_ratio) if passed else 0.0
     return passed, min(max(score, 0.0), 1.0)
 
 
@@ -54,7 +61,7 @@ def check_kline_volyin(closes: List[float], opens: List[float],
     放量阴线: close < open 且 volume > MA(volume, vol_period) * min_vol_ratio
     用于过滤（返回True表示出现放量阴线，可能需要回避）
     """
-    if not closes or not opens or len(volumes) < vol_period:
+    if len(closes) == 0 or len(opens) == 0 or len(volumes) < vol_period:
         return False, 0.0
     is_yin = closes[-1] < opens[-1]
     vol_ma = _calc_vol_ma(volumes[:-1], vol_period) if len(volumes) > vol_period else _calc_vol_ma(volumes, vol_period)
@@ -74,7 +81,7 @@ def check_kline_long_lower(closes: List[float], opens: List[float],
     下影 = min(open, close) - low
     实体 = abs(close - open)
     """
-    if not closes or not opens or not highs or not lows:
+    if len(closes) == 0 or len(opens) == 0 or len(highs) == 0 or len(lows) == 0:
         return False, 0.0
     c, o, h, l = closes[-1], opens[-1], highs[-1], lows[-1]
     body = abs(c - o)
@@ -95,7 +102,7 @@ def check_kline_doji(closes: List[float], opens: List[float],
     """
     十字星: 实体 / 总振幅 <= max_body_ratio
     """
-    if not closes or not opens or not highs or not lows:
+    if len(closes) == 0 or len(opens) == 0 or len(highs) == 0 or len(lows) == 0:
         return False, 0.0
     c, o, h, l = closes[-1], opens[-1], highs[-1], lows[-1]
     amplitude = h - l
@@ -113,7 +120,7 @@ def check_kline_big_yang(closes: List[float], opens: List[float],
     """
     大阳线(单根): (close - open) / open >= min_pct%
     """
-    if not closes or not opens:
+    if len(closes) == 0 or len(opens) == 0:
         return False, 0.0
     o = opens[-1]
     if o <= 0:

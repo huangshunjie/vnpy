@@ -8,6 +8,7 @@ import pyqtgraph as pg
 from pyqtgraph import GraphicsObject
 
 from vnpy.trader.ui import QtWidgets, QtCore, QtGui
+from .measure_tool import MeasureTool
 from vnpy.trader.constant import Interval
 
 if TYPE_CHECKING:
@@ -226,6 +227,7 @@ class KlineChartWidget(QtWidgets.QWidget):
         self._ma_flags:     dict = {5: True, 20: True, 60: True}
         self._show_triggers: bool = True
         self._show_candles:  bool = True
+
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -235,10 +237,10 @@ class KlineChartWidget(QtWidgets.QWidget):
         layout.setSpacing(0)
 
         self._info_bar = QtWidgets.QLabel("  — 移动鼠标查看K线数据 —")
-        self._info_bar.setMinimumHeight(24)
+        self._info_bar.setMinimumHeight(22)
         self._info_bar.setStyleSheet(
-            f"color:{_MUT};font-size:13px;background:{_PANEL};"
-            f"padding:2px 10px;border-bottom:1px solid {_BORD};")
+            f"color:{_MUT};font-size:12px;background:{_PANEL};"
+            f"padding:2px 8px;border-bottom:1px solid {_BORD};")
         layout.addWidget(self._info_bar)
 
         # 使用 QSplitter 使 K线区和成交量区高度可拖拽调整
@@ -280,6 +282,10 @@ class KlineChartWidget(QtWidgets.QWidget):
         self._proxy = pg.SignalProxy(
             self._main_plot.scene().sigMouseMoved,
             rateLimit=60, slot=self._on_mouse_moved)
+
+        # Connect mouse click for measure tool
+
+
 
         # -- Dynamic Y-axis: auto-update when user scrolls/zooms X axis --
         self._main_plot.sigXRangeChanged.connect(self._on_x_range_changed)
@@ -572,6 +578,8 @@ class KlineChartWidget(QtWidgets.QWidget):
         self._info_bar.setTextFormat(QtCore.Qt.TextFormat.RichText)
 
 
+
+
 # ── 后台数据加载线程 ─────────────────────────────────────────────────
 
 class _BarLoaderThread(QtCore.QThread):
@@ -620,61 +628,56 @@ class KlineViewTab(QtWidgets.QWidget):
         root.setSpacing(0)
 
         # 工具栏
+        # ── 主工具栏（紧凑版：控件更小、间距更紧）──────────────────
         toolbar = QtWidgets.QWidget()
-        toolbar.setFixedHeight(46)
+        toolbar.setFixedHeight(30)
         toolbar.setStyleSheet(
             f"background:{_PANEL};border-bottom:1px solid {_BORD};")
         tl = QtWidgets.QHBoxLayout(toolbar)
-        tl.setContentsMargins(14, 0, 14, 0)
-        tl.setSpacing(10)
+        tl.setContentsMargins(6, 0, 6, 0)
+        tl.setSpacing(3)
 
-        tl.addWidget(_lbl("K线图  Chart", _MAV, 14, True))
+        # 统一样式常量
+        _MINI_H = 20
+        _sep_style = f"background:{_BORD};max-width:1px;min-width:1px;"
+        _btn_common = (f"QPushButton{{border:none;border-radius:2px;"
+                       f"font-size:11px;font-weight:bold;padding:0 6px;}}")
 
-        tl.addWidget(_lbl("股票代码：", _MUT))
+        def _mk_sep():
+            s = QtWidgets.QFrame()
+            s.setFrameShape(QtWidgets.QFrame.Shape.VLine)
+            s.setFixedWidth(1)
+            s.setStyleSheet(_sep_style)
+            return s
+
+        # 代码输入 + 加载
         self._sym_edit = QtWidgets.QLineEdit()
-        self._sym_edit.setFixedWidth(110)
-        self._sym_edit.setPlaceholderText("如 000938")
+        self._sym_edit.setFixedSize(70, _MINI_H)
+        self._sym_edit.setPlaceholderText("代码")
         self._sym_edit.setStyleSheet(
             f"background:{_PAN2};color:{_FG};border:1px solid {_BORD};"
-            f"border-radius:4px;padding:3px 8px;font-size:14px;")
+            f"border-radius:2px;padding:0 4px;font-size:11px;")
         self._sym_edit.returnPressed.connect(self._on_manual_load)
         tl.addWidget(self._sym_edit)
 
         load_btn = QtWidgets.QPushButton("加载")
-        load_btn.setFixedSize(64, 28)
+        load_btn.setFixedSize(36, _MINI_H)
         load_btn.setStyleSheet(
-            f"background:{_BLU};color:#11111b;border:none;"
-            f"border-radius:4px;font-size:14px;font-weight:bold;")
+            _btn_common + f"QPushButton{{background:{_BLU};color:#11111b;}}")
         load_btn.clicked.connect(self._on_manual_load)
         tl.addWidget(load_btn)
 
-        sep = QtWidgets.QFrame()
-        sep.setFrameShape(QtWidgets.QFrame.Shape.VLine)
-        sep.setStyleSheet(f"color:{_BORD};")
-        tl.addWidget(sep)
+        tl.addWidget(_mk_sep())
 
-        # K线周期选择
-        tl.addWidget(_lbl('周期:', _MUT))
+        # K线周期选择（去掉"周期:"标签，节省空间）
         self._interval_cb = QtWidgets.QComboBox()
-        self._interval_cb.setFixedWidth(70)
-        self._interval_cb.setStyleSheet('''
-            QComboBox {
-                background:#11111b;
-                color:#cdd6f4;
-                border:1px solid #45475a;
-                border-radius:3px;
-                padding:2px 4px;
-                font-size:12px;
-                min-height:22px;
-            }
-            QComboBox::drop-down {
-                border:none;
-            }
-            QComboBox::down-arrow {
-                width:8px;
-                height:8px;
-            }
-        ''')
+        self._interval_cb.setFixedSize(66, _MINI_H)
+        self._interval_cb.setStyleSheet(
+            "QComboBox{background:#11111b;color:#cdd6f4;"
+            "border:1px solid #45475a;border-radius:2px;"
+            "padding:0 4px;font-size:11px;}"
+            "QComboBox::drop-down{border:none;width:14px;}"
+            "QComboBox::down-arrow{width:8px;height:8px;}")
         self._interval_options = [
             (Interval.DAILY,    "日线"),
             (Interval.MINUTE,   "1分钟"),
@@ -688,16 +691,17 @@ class KlineViewTab(QtWidgets.QWidget):
         self._interval_cb.setCurrentIndex(0)
         tl.addWidget(self._interval_cb)
 
-        sep = QtWidgets.QFrame()
-        sep.setFrameShape(QtWidgets.QFrame.Shape.VLine)
-        sep.setStyleSheet(f"color:{_BORD};")
-        tl.addWidget(sep)
+        tl.addWidget(_mk_sep())
 
-        tl.addWidget(_lbl('MA:', _MUT))
-        _edit_style = ('background:#11111b;color:#cdd6f4;border:1px solid #45475a;'
-                       'border-radius:3px;padding:1px 4px;font-size:13px;')
-        _chk_style  = 'font-size:14px;background:transparent;'
-        self._ma_inputs  = []
+        # ── MA 组：标准 checkbox（带对勾）+ 数字输入框 ──────────────
+        tl.addWidget(_lbl('MA', _MUT, 11))
+        _edit_style = ('background:#11111b;border:1px solid #45475a;'
+                       'border-radius:2px;padding:0 2px;'
+                       'font-size:11px;font-weight:bold;')
+        # 复选框：使用默认对勾（原生 ✔），字体着色为均线颜色
+        _chk_style = ('QCheckBox{{spacing:2px;background:transparent;}}'
+                      'QCheckBox::indicator{{width:12px;height:12px;}}')
+        self._ma_inputs = []
         self._ma_enabled = []
         _MA_DEFAULTS = [
             ('5',   '#f9e2af'),  # 黄色
@@ -710,62 +714,76 @@ class KlineViewTab(QtWidgets.QWidget):
         for default, color in _MA_DEFAULTS:
             chk = QtWidgets.QCheckBox()
             chk.setChecked(default in ('5', '20', '60'))
-            chk.setStyleSheet(f'color:{color};{_chk_style}')
+            chk.setStyleSheet(_chk_style.format(c=color))
+            chk.setFixedHeight(_MINI_H)
             chk.stateChanged.connect(self._on_ma_toggle)
             edt = QtWidgets.QLineEdit(default)
-            edt.setFixedWidth(34)
+            edt.setFixedSize(28, _MINI_H)
             edt.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-            edt.setStyleSheet(f'color:{color};{_edit_style}')
+            edt.setStyleSheet(f'QLineEdit{{{_edit_style}color:{color};}}')
             edt.editingFinished.connect(self._on_ma_toggle)
             tl.addWidget(chk)
             tl.addWidget(edt)
             self._ma_inputs.append(edt)
             self._ma_enabled.append(chk)
 
-        sep2 = QtWidgets.QFrame()
-        sep2.setFrameShape(QtWidgets.QFrame.Shape.VLine)
-        sep2.setStyleSheet('color:#45475a;')
-        tl.addWidget(sep2)
+        tl.addWidget(_mk_sep())
 
-        self._candle_chk = QtWidgets.QCheckBox('K线')
-        self._candle_chk.setChecked(True)
-        self._candle_chk.setStyleSheet(f'color:{_C_UP};font-size:14px;background:transparent;')
+        # ── 显示选项：标准 checkbox + 彩色文字标签 ──────────────
+        _opt_chk_style = ('QCheckBox{{color:{c};font-size:11px;'
+                          'background:transparent;spacing:2px;}}'
+                          'QCheckBox::indicator{{width:12px;height:12px;}}')
+
+        def _mk_opt(text: str, color: str):
+            c = QtWidgets.QCheckBox(text)
+            c.setChecked(True)
+            c.setStyleSheet(_opt_chk_style.format(c=color))
+            c.setFixedHeight(_MINI_H)
+            return c
+
+        self._candle_chk = _mk_opt('K线', _C_UP)
         self._candle_chk.stateChanged.connect(self._on_ma_toggle)
         tl.addWidget(self._candle_chk)
 
-        self._vol_chk = QtWidgets.QCheckBox('成交量')
-        self._vol_chk.setChecked(True)
-        self._vol_chk.setStyleSheet(f'color:{_YLW};font-size:14px;background:transparent;')
+        self._vol_chk = _mk_opt('量', _YLW)
         self._vol_chk.stateChanged.connect(self._on_vol_toggle)
         tl.addWidget(self._vol_chk)
 
-        self._trig_chk = QtWidgets.QCheckBox('触发信号')
-        self._trig_chk.setChecked(True)
-        self._trig_chk.setStyleSheet('color:#c084fc;font-size:14px;background:transparent;')
+        self._trig_chk = _mk_opt('信号', '#c084fc')
         self._trig_chk.stateChanged.connect(self._on_ma_toggle)
         tl.addWidget(self._trig_chk)
 
-        sep3 = QtWidgets.QFrame()
-        sep3.setFrameShape(QtWidgets.QFrame.Shape.VLine)
-        sep3.setStyleSheet('color:#45475a;')
-        tl.addWidget(sep3)
-
-        self._yaxis_chk = QtWidgets.QCheckBox('Y轴自适应')
-        self._yaxis_chk.setChecked(True)
-        self._yaxis_chk.setStyleSheet('color:#94e2d5;font-size:14px;background:transparent;')
+        self._yaxis_chk = _mk_opt('Y轴', '#94e2d5')
         self._yaxis_chk.stateChanged.connect(self._on_yaxis_toggle)
         tl.addWidget(self._yaxis_chk)
 
-        self._fullscreen_btn = QtWidgets.QPushButton('⛶ 全屏')
-        self._fullscreen_btn.setFixedHeight(28)
+        tl.addWidget(_mk_sep())
+
+        # 测量工具 + 全屏（图标按钮）
+        self._measure_btn = QtWidgets.QPushButton('📏')
+        self._measure_btn.setCheckable(True)
+        self._measure_btn.setFixedSize(24, _MINI_H)
+        self._measure_btn.setToolTip('测量工具')
+        self._measure_btn.setStyleSheet(
+            'QPushButton{background:#313244;color:#cdd6f4;'
+            'border:1px solid #45475a;border-radius:2px;font-size:11px;}'
+            'QPushButton:hover{background:#45475a;}'
+            'QPushButton:checked{background:#a6e3a1;color:#11111b;'
+            'border-color:#a6e3a1;}')
+        self._measure_btn.clicked.connect(self._on_measure_toggle)
+        tl.addWidget(self._measure_btn)
+
+        self._fullscreen_btn = QtWidgets.QPushButton('⛶')
+        self._fullscreen_btn.setFixedSize(24, _MINI_H)
+        self._fullscreen_btn.setToolTip('全屏')
         self._fullscreen_btn.setStyleSheet(
-            'background:#fab387;color:#11111b;border:none;'
-            'border-radius:4px;font-size:13px;font-weight:bold;padding:0 12px;')
+            _btn_common + "QPushButton{background:#fab387;color:#11111b;"
+                          "font-size:13px;padding:0;}")
         self._fullscreen_btn.clicked.connect(self._on_fullscreen)
         tl.addWidget(self._fullscreen_btn)
 
         tl.addStretch()
-        self._title_lbl = _lbl("未选择股票", _MUT, 14)
+        self._title_lbl = _lbl("未选择股票", _MUT, 10)
         tl.addWidget(self._title_lbl)
 
         root.addWidget(toolbar)
@@ -774,42 +792,39 @@ class KlineViewTab(QtWidgets.QWidget):
         self._chart = KlineChartWidget()
         root.addWidget(self._chart, 1)
 
-        # 底部图例栏
+        # ── 底部栏：仅保留触发计数 + 跳转按钮（默认隐藏）─────────
+        # 说明：▲/▼、涨/跌、MA 颜色 都已在工具栏和图表中体现，无需再单列。
         legend = QtWidgets.QWidget()
-        legend.setFixedHeight(28)
+        legend.setFixedHeight(22)
         legend.setStyleSheet(
             f"background:{_PANEL};border-top:1px solid {_BORD};")
         ll = QtWidgets.QHBoxLayout(legend)
-        ll.setContentsMargins(14, 0, 14, 0)
-        ll.setSpacing(18)
-        ll.addWidget(_lbl("▲ 买入信号", _GRN, 13))
-        ll.addWidget(_lbl("▼ 卖出信号", _RED, 13))
-        ll.addWidget(_lbl("■ 阳线（涨）", _C_UP, 13))
-        ll.addWidget(_lbl("■ 阴线（跌）", _C_DN, 13))
-        ll.addWidget(_lbl("— MA5",  _YLW, 13))
-        ll.addWidget(_lbl("— MA20", _BLU, 13))
-        ll.addWidget(_lbl("— MA60", _MAV, 13))
+        ll.setContentsMargins(8, 0, 8, 0)
+        ll.setSpacing(6)
         ll.addStretch()
-        self._trig_count_lbl = _lbl("", _MUT, 13)
+        self._trig_count_lbl = _lbl("", _MUT, 10)
         ll.addWidget(self._trig_count_lbl)
 
         # 触发点跳转按钮
-        self._prev_btn = QtWidgets.QPushButton('< 上一个')
-        self._prev_btn.setFixedHeight(22)
+        self._prev_btn = QtWidgets.QPushButton('◀')
+        self._prev_btn.setFixedSize(22, 18)
         self._prev_btn.setStyleSheet(
             'background:#cba6f7;color:#11111b;border:none;'
-            'border-radius:4px;font-size:13px;font-weight:bold;padding:0 10px;')
+            'border-radius:2px;font-size:10px;font-weight:bold;')
         self._prev_btn.clicked.connect(lambda: self._chart.jump_to_trigger(-1))
         ll.addWidget(self._prev_btn)
-        self._next_btn = QtWidgets.QPushButton('下一个 >')
-        self._next_btn.setFixedHeight(22)
+        self._next_btn = QtWidgets.QPushButton('▶')
+        self._next_btn.setFixedSize(22, 18)
         self._next_btn.setStyleSheet(
             'background:#89b4fa;color:#11111b;border:none;'
-            'border-radius:4px;font-size:13px;font-weight:bold;padding:0 10px;')
+            'border-radius:2px;font-size:10px;font-weight:bold;')
         self._next_btn.clicked.connect(lambda: self._chart.jump_to_trigger(+1))
         ll.addWidget(self._next_btn)
         self._prev_btn.setVisible(False)
         self._next_btn.setVisible(False)
+        # 底部栏默认隐藏，仅在有触发信号时显示（见 _update_trig_count_visibility）
+        self._legend_bar = legend
+        legend.setVisible(False)
         root.addWidget(legend)
 
     # ── 公开接口 ─────────────────────────────────────────────────────
@@ -934,8 +949,12 @@ class KlineViewTab(QtWidgets.QWidget):
             parts.append(f"卖出 {len(sell_indices)}")
         self._trig_count_lbl.setText(" | ".join(parts) if parts else "")
 
-        self._prev_btn.setVisible(total_cnt > 0)
-        self._next_btn.setVisible(total_cnt > 0)
+        # 有触发信号时才显示底部栏
+        has_triggers = total_cnt > 0
+        self._legend_bar.setVisible(has_triggers)
+        self._prev_btn.setVisible(has_triggers)
+        self._next_btn.setVisible(has_triggers)
+        
         self._chart.set_ma_flags(self._get_ma_config(), self._trig_chk.isChecked())
         self._chart.load(bars, buy_indices, sell_indices)
 
@@ -954,6 +973,12 @@ class KlineViewTab(QtWidgets.QWidget):
         sym = self._sym_edit.text().strip()
         if sym:
             self.show_symbol(sym)
+
+    def _on_measure_toggle(self, checked: bool) -> None:
+        """Toggle measure mode using MeasureTool."""
+        if not hasattr(self._chart, '_measure_tool'):
+            self._chart._measure_tool = MeasureTool(self._chart._main_plot, self._chart._bars, self._chart._dates)
+        self._chart._measure_tool.set_active(checked)
 
     def _get_ma_config(self) -> list:
         colors = ['#f9e2af', '#94e2d5', '#89b4fa', '#cba6f7', '#f5c2e7', '#a6e3a1']
@@ -1114,8 +1139,9 @@ class _KlineFullscreenWindow(QtWidgets.QWidget):
 
         # MA 均线设置（6根）
         tl.addWidget(_lbl('MA:', _MUT, 13))
-        _edit_style = ('background:#11111b;color:#cdd6f4;border:1px solid #45475a;'
-                       'border-radius:3px;padding:1px 4px;font-size:12px;')
+        # 注意：_edit_style 不设置 color，避免覆盖后面按均线颜色设置的字体色
+        _edit_style = ('background:#11111b;border:1px solid #45475a;'
+                       'border-radius:3px;padding:1px 4px;font-size:12px;font-weight:bold;')
         _chk_style = 'font-size:13px;background:transparent;'
         _MA_DEFAULTS = [
             ('5',   '#f9e2af'),
@@ -1133,11 +1159,11 @@ class _KlineFullscreenWindow(QtWidgets.QWidget):
             init_period = str(ma_flags[idx_ma][0]) if idx_ma < len(ma_flags) else default
             chk = QtWidgets.QCheckBox()
             chk.setChecked(initially_on)
-            chk.setStyleSheet(f'color:{color};{_chk_style}')
+            chk.setStyleSheet(f'QCheckBox{{color:{color};{_chk_style}}}')
             edt = QtWidgets.QLineEdit(init_period)
             edt.setFixedWidth(34)
             edt.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-            edt.setStyleSheet(f'color:{color};{_edit_style}')
+            edt.setStyleSheet(f'QLineEdit{{{_edit_style}color:{color};}}')
             tl.addWidget(chk)
             tl.addWidget(edt)
             self._ma_inputs.append(edt)
@@ -1160,6 +1186,19 @@ class _KlineFullscreenWindow(QtWidgets.QWidget):
 
         tl.addStretch()
         tl.addWidget(_lbl("按 Esc 退出全屏", _MUT, 12))
+
+        
+        # 测量工具按钮
+        self._fs_measure_btn = QtWidgets.QPushButton("📏 测量")
+        self._fs_measure_btn.setCheckable(True)
+        self._fs_measure_btn.setFixedHeight(28)
+        self._fs_measure_btn.setStyleSheet(
+            "QPushButton{background:#313244;color:#cdd6f4;border:1px solid #45475a;"
+            "border-radius:4px;padding:2px 10px;font-size:13px;}"
+            "QPushButton:hover{background:#45475a;}"
+            "QPushButton:checked{background:#FFA500;color:#1e1e2e;border-color:#FFA500;}")
+        self._fs_measure_btn.clicked.connect(self._on_fs_measure_toggle)
+        tl.addWidget(self._fs_measure_btn)
 
         close_btn = QtWidgets.QPushButton("✕ 关闭")
         close_btn.setFixedHeight(26)
@@ -1278,6 +1317,10 @@ class _KlineFullscreenWindow(QtWidgets.QWidget):
         self._chart._show_triggers = self._trig_chk.isChecked()
         self._chart._redraw()
 
+    def _on_fs_measure_toggle(self, checked: bool) -> None:
+        """Toggle measure mode in fullscreen chart."""
+        self._chart._on_measure_toggle(checked)
+
     def keyPressEvent(self, event) -> None:
         if event.key() == QtCore.Qt.Key.Key_Escape:
             self.close()
@@ -1303,6 +1346,7 @@ class _FullscreenChart(QtWidgets.QWidget):
         self._ma_flags = ma_flags
         self._show_triggers = show_triggers
         self._show_candles = show_candles
+
         self._build_ui()
         self._redraw()
 
@@ -1358,6 +1402,10 @@ class _FullscreenChart(QtWidgets.QWidget):
         self._proxy = pg.SignalProxy(
             self._main_plot.scene().sigMouseMoved,
             rateLimit=60, slot=self._on_mouse_moved)
+
+        # Connect mouse click for measure tool
+
+
 
     def _redraw(self) -> None:
         self._main_plot.clear()
@@ -1497,3 +1545,9 @@ class _FullscreenChart(QtWidgets.QWidget):
             f"量 <span style='color:{_MUT}'>{vol/1e4:.0f}万</span>"
             f"{mark}")
         self._info_bar.setTextFormat(QtCore.Qt.TextFormat.RichText)
+    # ── Measure tool methods ──────────────────────────────────────────
+    def _on_measure_toggle(self, checked: bool) -> None:
+        """Toggle measure mode using MeasureTool."""
+        if not hasattr(self, '_measure_tool') or self._measure_tool is None:
+            self._measure_tool = MeasureTool(self._main_plot, self._bars, self._dates)
+        self._measure_tool.set_active(checked)

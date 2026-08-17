@@ -1,0 +1,7 @@
+_on_measure_toggle: 2
+_on_measure_click: 1
+MeasureTool(: 1
+_measure_mode: 2
+_measure_start: 5
+_measure_line: 10
+_measure_label: 16

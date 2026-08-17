@@ -84,10 +84,10 @@ def cond_kline_yang(weight=1.0) -> Condition:
                      {}, weight, "阳线")
 
 
-def cond_kline_shrink_yin(vol_period=5, weight=1.0) -> Condition:
+def cond_kline_shrink_yin(vol_period=5, vol_ratio=0.8, weight=1.0) -> Condition:
     return Condition(ConditionCategory.KLINE, ConditionIndicator.KLINE_SHRINK_YIN,
-                     {"vol_period": vol_period},
-                     weight, "缩量阴线")
+                     {"vol_period": vol_period, "vol_ratio": vol_ratio},
+                     weight, f"缩量阴线(量比<{vol_ratio})")
 
 
 def cond_kline_volyin(vol_period=5, min_vol_ratio=1.5, weight=1.0) -> Condition:

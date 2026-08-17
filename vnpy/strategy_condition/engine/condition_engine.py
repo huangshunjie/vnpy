@@ -1,13 +1,20 @@
 """
 strategy_condition/engine/condition_engine.py
 条件引擎：Condition 叶节点 -> 具体指标计算的调度层
+
+Phase 2-4 多周期改造：
+- 支持从 MultiTimeframeContext 获取指定周期的数据
+- 保持向后兼容：仍支持传统的 (symbol, bars) 接口
 """
 from __future__ import annotations
 import math
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+from vnpy.trader.constant import Interval
 
 from ..constant import ConditionIndicator
 from ..core.condition import Condition
+from ..core.mtf_context import MultiTimeframeContext
 from ..indicators.trend      import (check_ma_slope, check_weekly_ma_slope,
                                       check_ma_alignment, check_new_high_n)
 from ..indicators.momentum   import (check_macd_golden, check_macd_death,
@@ -15,12 +22,20 @@ from ..indicators.momentum   import (check_macd_golden, check_macd_death,
 from ..indicators.volume     import (check_volume_ratio, check_volume_price_up,
                                       check_volume_shrink)
 from ..indicators.volatility import check_atr_ratio, check_boll_width
+from ..indicators.kline_patterns import (
+    check_kline_yin, check_kline_yang, check_kline_shrink_yin,
+    check_kline_doji, check_kline_big_yang, check_kline_limit_up,
+    check_kline_long_lower
+)
+
 
 
 class ConditionEngine:
     """
     叶节点条件评估引擎。
     通过依赖注入接收 candle_buffer / multi_tf / factor_engine。
+    
+    Phase 2-4 改造：支持多周期数据评估。
     """
 
     def __init__(self, candle_buffer=None, multi_tf=None,
@@ -36,25 +51,54 @@ class ConditionEngine:
 
     def eval_condition(self, cond: Condition,
                        symbol: str, bars: list,
-                       _precomputed: dict = None) -> Tuple[bool, float]:
+                       _precomputed: dict = None,
+                       _mtf_context: Optional[MultiTimeframeContext] = None) -> Tuple[bool, float]:
         """
         评估买入条件树叶节点，返回 (passed, score)。
+
+        Phase 2-4 多周期支持：
+        - 如果提供了 _mtf_context 且 cond.data_interval 不为 None，
+          则从 _mtf_context 中获取指定周期的数据进行评估
+        - 否则使用传统的 bars 参数（向后兼容）
+
+        Args:
+            cond: 条件对象
+            symbol: 股票代码
+            bars: 传统单周期K线数据（向后兼容）
+            _precomputed: 预计算数组字典（性能优化）
+            _mtf_context: 多周期上下文（Phase 2-4 新增）
 
         _precomputed: 可选预计算数组字典，格式：
             {"closes": np_array, "highs": np_array,
              "lows": np_array, "volumes": np_array}
             传入时跳过 list comprehension，直接使用（性能优化）。
         """
-        if not cond.enabled or not bars:
-            return (True, 1.0) if not cond.enabled else (False, 0.0)
+        if not cond.enabled:
+            return True, 1.0
+
+        # Phase 2-4: 多周期数据选择
+        if _mtf_context and cond.data_interval:
+            # 使用指定周期的数据
+            bars = _mtf_context.get_bars(cond.data_interval)
+            if not bars:
+                # 数据不足，条件不通过
+                return False, 0.0
+            # 清空预计算缓存（因为bars已经切换）
+            _precomputed = None
+
+        if not bars:
+            return False, 0.0
+
         p = cond.params
         if _precomputed:
             closes = _precomputed["closes"]
+            opens = _precomputed.get("opens")  # 新增：提取 opens
             highs = _precomputed["highs"]
             lows = _precomputed["lows"]
             volumes = _precomputed["volumes"]
         else:
             closes  = [b.close  for b in bars]
+            opens   = [b.open   for b in bars]  # 保持一致
             highs   = [b.high   for b in bars]
             lows    = [b.low    for b in bars]
             volumes = [float(b.volume) for b in bars]
@@ -64,6 +108,32 @@ class ConditionEngine:
         except Exception as e:
             self._log(f"[ConditionEngine] {cond.indicator.value}: {e}")
             return False, 0.0
+
+    def eval_condition_mtf(self, cond: Condition,
+                           symbol: str, bars: list,
+                           mtf_context: MultiTimeframeContext,
+                           _precomputed: dict = None) -> Tuple[bool, float]:
+        """
+        多周期条件评估方法（Phase 6-8 统一接口）
+        
+        这是一个包装方法，将 mtf_context 传递给 eval_condition。
+        与 Phase 6 MonitorEngine 和 Phase 7 ScanEngine 的调用方式保持一致。
+        
+        Args:
+            cond: 条件对象
+            symbol: 股票代码
+            bars: 执行周期的K线数据
+            mtf_context: 多周期上下文（包含所有需要的周期数据）
+            _precomputed: 预计算数组字典（可选）
+        
+        Returns:
+            (passed, score): 条件是否通过及得分
+        """
+        return self.eval_condition(
+            cond, symbol, bars,
+            _precomputed=_precomputed,
+            _mtf_context=mtf_context
+        )
 
     def _dispatch(self, ind: ConditionIndicator, p: dict, symbol: str,
                   closes, highs, lows, volumes, bars) -> Tuple[bool, float]:
@@ -145,6 +215,33 @@ class ConditionEngine:
                 ms = float(p.get("min_score",0.4))
                 return sc>=ms, min(sc,1.0) if sc>=ms else 0.0
             except Exception: return False, 0.0
+
+
+        # ── K线形态（单根） ───────────────────────────────────────────
+        if ind == CI.KLINE_YANG:
+            opens = [b.open for b in bars]
+            return check_kline_yang(closes, opens)
+        if ind == CI.KLINE_YIN:
+            opens = [b.open for b in bars]
+            return check_kline_yin(closes, opens)
+        if ind == CI.KLINE_SHRINK_YIN:
+            opens = [b.open for b in bars]
+            return check_kline_shrink_yin(closes, opens, volumes,
+                                          int(p.get("vol_period", 5)),
+                                          float(p.get("max_vol_ratio", 0.8)))
+        if ind == CI.KLINE_DOJI:
+            opens = [b.open for b in bars]
+            return check_kline_doji(closes, opens, highs, lows,
+                                    float(p.get("max_body_ratio", 0.1)))
+        if ind == CI.KLINE_BIG_YANG:
+            opens = [b.open for b in bars]
+            return check_kline_big_yang(closes, opens, float(p.get("min_pct", 5.0)))
+        if ind == CI.KLINE_LIMIT_UP:
+            return check_kline_limit_up(closes, closes)
+        if ind == CI.KLINE_LONG_LOWER:
+            opens = [b.open for b in bars]
+            return check_kline_long_lower(closes, opens, highs, lows,
+                                          float(p.get("min_ratio", 2.0)))
 
         # ── 波动 ──────────────────────────────────────────────────────
         if ind == CI.ATR_RATIO:

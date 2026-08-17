@@ -101,9 +101,27 @@ class ConditionNode:
             return eval_fn(self.condition, symbol, bars)
 
         if not self.children:
-            return True, 1.0
+            # 空节点的返回值取决于操作类型：
+            # - AND: 没有约束 → True（空集的 AND 为真）
+            # - OR: 没有满足的条件 → False（空集的 OR 为假）
+            # - NOT/SEQUENCE: 理论上不应该为空，返回 False 保险
+            if self.op == NodeOp.AND:
+                return True, 1.0
+            else:
+                return False, 0.0
 
-        results = [c.evaluate(symbol, bars, eval_fn) for c in self.children]
+        results = []
+        for c in self.children:
+            if isinstance(c, ConditionNode):
+                results.append(c.evaluate(symbol, bars, eval_fn))
+            elif isinstance(c, Condition):
+                # 兼容：Condition 对象直接作为 children（未包装为叶节点）
+                if not c.enabled:
+                    results.append((True, 1.0))
+                else:
+                    results.append(eval_fn(c, symbol, bars))
+            else:
+                results.append((True, 1.0))
 
         if self.op == NodeOp.SEQUENCE:
             return self._eval_sequence(symbol, bars, eval_fn)
@@ -213,20 +231,29 @@ class ConditionNode:
             return [self.condition] if self.condition else []
         result = []
         for child in self.children:
-            result.extend(child.all_conditions())
+            if isinstance(child, ConditionNode):
+                result.extend(child.all_conditions())
+            elif isinstance(child, Condition):
+                result.append(child)
         return result
 
     def depth(self) -> int:
         """树深度"""
         if self.op == NodeOp.LEAF or not self.children:
             return 1
-        return 1 + max(c.depth() for c in self.children)
+        return 1 + max(
+            c.depth() if isinstance(c, ConditionNode) else 1
+            for c in self.children
+        )
 
     def count_leaves(self) -> int:
         """叶节点数量"""
         if self.op == NodeOp.LEAF:
             return 1
-        return sum(c.count_leaves() for c in self.children)
+        return sum(
+            c.count_leaves() if isinstance(c, ConditionNode) else 1
+            for c in self.children
+        )
 
     # ── JSON 序列化 ───────────────────────────────────────────────────
 
