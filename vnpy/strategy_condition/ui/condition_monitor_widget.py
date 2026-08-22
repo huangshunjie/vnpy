@@ -417,6 +417,9 @@ class _PeriodMonitorPanel(QtWidgets.QWidget):
         self._current_snapshots: List[ConditionSnapshot] = []
         self._current_bars: list = []
         self._synced: bool = False
+        # 用于全屏联动：由 ConditionMonitorWidget 设置
+        self._parent_monitor = None
+        self._panel_type = 'unknown'  # 'daily' 或 'minute'
         self._init_ui()
 
     def _init_ui(self):
@@ -433,6 +436,8 @@ class _PeriodMonitorPanel(QtWidgets.QWidget):
 
         # 上方：完整 K 线图（复用 KlineViewTab，和 Chart tab 完全一致）
         self._kline_tab = KlineViewTab()
+        # 传递面板引用给 KlineViewTab（供全屏窗口获取联动上下文）
+        self._kline_tab._owner_panel = self
         splitter.addWidget(self._kline_tab)
 
         # 下方：条件波形图
@@ -645,29 +650,31 @@ class _PeriodMonitorPanel(QtWidgets.QWidget):
                 f"<span style='color:#cba6f7'>{self._period_title}</span>  "
                 f"<span style='color:#6c7086'>({len(bars)} bars)</span>")
 
-            dates = [str(s.dt)[:16] for s in snapshots]
+            dates = [str(s.dt)[:16] for s in (snapshots or [])]
             self._waveform_view.load_data(
-                snapshots, dates,
+                snapshots or [], dates,
                 buy_indices=buy_indices,
                 sell_indices=sell_indices,
             )
             # 同步波形数据到 KlineViewTab（供全屏窗口使用）
             self._kline_tab.set_waveform_data(
-                snapshots, dates,
+                snapshots or [], dates,
                 buy_indices=buy_indices,
                 sell_indices=sell_indices,
             )
 
-        # 建立三区同步
-        if bars and snapshots:
+        # 建立三区同步（只要 bars 已加载就建立——即使 snapshots 为空，
+        # 波形和K线间的 X 轴联动仍然需要。snapshots 为空只是不显示 lifecycle 面板）
+        if bars:
             try:
                 self._setup_sync()
             except Exception as e:
                 print(f"[Monitor] sync setup failed: {e}")
 
             # 数据加载后，自动显示最后一根 bar 的 Lifecycle 诊断
-            last_bar_idx = snapshots[-1].bar_index
-            self._update_lifecycle_for_bar(last_bar_idx)
+            if snapshots:
+                last_bar_idx = snapshots[-1].bar_index
+                self._update_lifecycle_for_bar(last_bar_idx)
 
     def show_empty(self, symbol: str, message: str) -> None:
         self._current_symbol = symbol
@@ -707,6 +714,8 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
 
     lifecycle_info_changed = QtCore.Signal(str, str)
     minute_interval_changed = QtCore.Signal()
+    # 日线点击信号（datetime, {buy:[...], sell:[...]}）—— 用于全屏联动
+    daily_bar_clicked = QtCore.Signal(object, dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -755,6 +764,12 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
         self._minute_panel.cursor_datetime_changed.connect(
             self._sync_daily_cursor)
 
+        # 设置面板引用和类型（用于全屏联动）
+        self._daily_panel._parent_monitor = self
+        self._daily_panel._panel_type = 'daily'
+        self._minute_panel._parent_monitor = self
+        self._minute_panel._panel_type = 'minute'
+
         self._period_splitter = QtWidgets.QSplitter(
             QtCore.Qt.Orientation.Vertical)
         self._period_splitter.setHandleWidth(6)
@@ -764,6 +779,150 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
         self._period_splitter.setStretchFactor(1, 1)
         layout.addWidget(self._period_splitter, 1)
         self._apply_mode("双周期")
+
+        # 连接日线K线点击事件（实现日线→分钟联动）
+        self._connect_daily_click_handler()
+
+        # 分钟周期下拉变化时，调用方可主动通知重新加载数据
+        # （由 StrategyConditionWidget._feed_monitor 监听此信号）
+        self.minute_interval_changed.connect(
+            self._on_minute_interval_changed)
+
+    def _on_minute_interval_changed(self) -> None:
+        """
+        分钟周期下拉框变化时清空当前分钟面板的缓存标记，
+        并提示调用方重新加载数据（信号会冒泡到 widget 端）。
+        """
+        # 重置分钟面板的 cache 状态，让 _feed_monitor 重新加载
+        if hasattr(self, '_minute_panel'):
+            self._minute_panel._last_minute_interval_key = (
+                self.minute_interval_key())
+
+    def _connect_daily_click_handler(self):
+        """连接日线K线点击处理器"""
+        try:
+            if hasattr(self._daily_panel, '_kline_tab'):
+                kline_tab = self._daily_panel._kline_tab
+                if hasattr(kline_tab, '_chart'):
+                    kline_tab._chart.bar_clicked.connect(
+                        self._on_daily_bar_clicked)
+        except Exception as e:
+            print(f"[联动] 连接日线点击失败: {e}")
+
+    def _on_daily_bar_clicked(self, clicked_dt):
+        """处理日线K线点击事件"""
+        try:
+            clicked_date = clicked_dt.date()
+            print(f"[联动] 日线K线被点击: {clicked_date}")
+
+            # 查找该日期的买卖信号
+            signals = self._get_signals_for_date(clicked_date)
+            print(f"[联动] 找到信号: 买入={len(signals['buy'])}, 卖出={len(signals['sell'])}")
+
+            # 更新分钟面板
+            self._update_minute_view_for_date(clicked_date, signals)
+
+            # 发射信号（供全屏窗口监听）
+            self.daily_bar_clicked.emit(clicked_dt, signals)
+
+        except Exception as e:
+            print(f"[联动] 处理日线点击失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _get_signals_for_date(self, target_date):
+        """获取指定日期的所有信号时间（优先使用真实 snapshot.signal_type）
+
+        优先从分钟面板的 snapshots 读取每根 bar 的 signal_type，
+        定位目标日期内真正触发买入/卖出的分钟 K 线 datetime。
+        若无 snapshots 或无 signal_type，降级为"首根买入/末根卖出"方案。
+        """
+        result = {'buy': [], 'sell': []}
+
+        if not hasattr(self, '_minute_panel'):
+            return result
+
+        minute_panel = self._minute_panel
+
+        # ── 方案A：从真实 snapshot.signal_type 读取（优先）──────────────
+        minute_snapshots = getattr(minute_panel, '_current_snapshots', [])
+        if minute_snapshots:
+            for snap in minute_snapshots:
+                snap_dt = getattr(snap, 'dt', None)
+                if snap_dt is None:
+                    continue
+                if snap_dt.date() != target_date:
+                    continue
+                signal_type = getattr(snap, 'signal_type', None)
+                if signal_type == 'buy':
+                    result['buy'].append(snap_dt)
+                elif signal_type == 'sell':
+                    result['sell'].append(snap_dt)
+            # 若找到真实信号，直接返回
+            if result['buy'] or result['sell']:
+                return result
+
+        # ── 方案B：降级方案（无 snapshots 或无 signal_type）─────────────
+        minute_bars = getattr(minute_panel, '_current_bars', [])
+        if not minute_bars:
+            return result
+
+        # 收集当前日线面板持有的买卖日期
+        daily_panel = self._daily_panel
+        buy_dates = getattr(daily_panel, '_last_buy_dates', None)
+        sell_dates = getattr(daily_panel, '_last_sell_dates', None)
+
+        # 如果日线面板未缓存，尝试从 KlineViewTab 获取
+        if buy_dates is None:
+            buy_dates = getattr(daily_panel._kline_tab, '_last_buy_dates', [])
+        if sell_dates is None:
+            sell_dates = getattr(daily_panel._kline_tab, '_last_sell_dates', [])
+
+        # 目标日期字符串
+        date_str = target_date.strftime('%Y-%m-%d')
+
+        # 判断目标日期是否为买入/卖出信号日
+        is_buy_day = any(str(d)[:10] == date_str for d in (buy_dates or []))
+        is_sell_day = any(str(d)[:10] == date_str for d in (sell_dates or []))
+
+        # 若该日是信号日，则将该日所有分钟bar的datetime作为信号候选
+        if is_buy_day or is_sell_day:
+            day_minute_dts = [
+                b.datetime for b in minute_bars
+                if b.datetime.date() == target_date
+            ]
+            if day_minute_dts:
+                # 买入信号标记在当天第一根分钟K线（开盘）
+                # 卖出信号标记在当天最后一根分钟K线（收盘）
+                if is_buy_day:
+                    result['buy'].append(day_minute_dts[0])
+                if is_sell_day:
+                    result['sell'].append(day_minute_dts[-1])
+
+        return result
+
+    def _update_minute_view_for_date(self, target_date, signals):
+        """更新分钟K线视图，聚焦到指定日期"""
+        try:
+            if not hasattr(self, '_minute_panel'):
+                return
+
+            minute_panel = self._minute_panel
+            if not hasattr(minute_panel, '_kline_tab'):
+                return
+
+            kline_tab = minute_panel._kline_tab
+
+            # 调用 focus_on_date 方法
+            if hasattr(kline_tab, 'focus_on_date'):
+                kline_tab.focus_on_date(target_date, signals)
+            else:
+                print(f"[联动] KlineViewTab 缺少 focus_on_date 方法")
+
+        except Exception as e:
+            print(f"[联动] 更新分钟视图失败: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _sync_daily_cursor(self, minute_dt) -> None:
         daily_dt = self._daily_panel.focus_datetime(
@@ -789,26 +948,123 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
     def load_layered_data(
         self, symbol: str,
         daily_snapshots: List[ConditionSnapshot], daily_bars: list,
-        minute_snapshots: List[ConditionSnapshot], minute_bars: list,
+        minute_snapshots: List[ConditionSnapshot] = None,
+        minute_bars: list = None,
         buy_dates: list = None, sell_dates: list = None,
     ) -> None:
-        buy_dates = buy_dates or []
-        sell_dates = sell_dates or []
+        """
+        双周期数据加载（双周期 Monitor Tab 入口）。
+
+        Args:
+            symbol: 股票代码
+            daily_snapshots: 日线 ConditionSnapshot 列表
+            daily_bars: 日线 K 线数据
+            minute_snapshots: 分钟 ConditionSnapshot 列表（可为空——降级场景）
+            minute_bars: 分钟 K 线数据（来自 _load_bars_by_date_range）
+            buy_dates: 回测/选股产生的买入日期列表
+            sell_dates: 回测/选股产生的卖出日期列表
+
+        兼容旧调用 + 新场景：
+            旧版 widget 只传日线 → 自动构造"日内首根买入/末根卖出"的简易 snapshots
+            新版 widget 传日+分双层数据 → 完整驱动双周期面板
+        """
+        buy_dates = list(buy_dates or [])
+        sell_dates = list(sell_dates or [])
+        minute_bars = list(minute_bars or [])
+        minute_snapshots = list(minute_snapshots or [])
+
         if daily_bars:
             self._daily_panel.load_snapshots(
                 symbol, daily_snapshots, daily_bars, buy_dates, sell_dates)
         else:
             self._daily_panel.show_empty(symbol, "缺少日线数据")
+
         if minute_bars:
+            # ── 降级场景：调用方未生成 minute_snapshots ──
+            # 用 bars + daily 买卖日期构造最小可用 snapshots，
+            # 保证 _PeriodMonitorPanel.load_snapshots 不会因空 snapshots 短路退出。
+            if not minute_snapshots:
+                minute_snapshots = self._build_minute_snapshots_fallback(
+                    symbol, minute_bars, buy_dates, sell_dates)
             self._minute_panel.load_snapshots(
                 symbol, minute_snapshots, minute_bars,
                 buy_dates, sell_dates)
         else:
             self._minute_panel.show_empty(
                 symbol, f"缺少{self.minute_interval_text()}数据")
+
+        # 缓存买卖日期到日线面板（供联动信号查询使用）
+        self._daily_panel._last_buy_dates = list(buy_dates)
+        self._daily_panel._last_sell_dates = list(sell_dates)
         self._status_lbl.setText(
             f"日线 {len(daily_bars)} 根 / "
             f"{self.minute_interval_text()} {len(minute_bars)} 根")
+        print(
+            f"[Monitor] load_layered_data {symbol}: "
+            f"daily={len(daily_bars)} bars/{len(daily_snapshots)} snaps, "
+            f"minute={len(minute_bars)} bars/{len(minute_snapshots)} snaps",
+            flush=True,
+        )
+
+    def _build_minute_snapshots_fallback(
+        self, symbol: str, minute_bars: list,
+        buy_dates: list, sell_dates: list,
+    ) -> list:
+        """
+        当调用方未生成 minute snapshots 时，根据 buy_dates/sell_dates 与
+        minute_bars 的日内位置构造最小可用的 ConditionSnapshot 列表。
+
+        规则（与 _get_signals_for_date 降级方案 B 一致）：
+          - 每根 minute bar 对应一个 snapshot（signal_type 默认 None）
+          - 匹配 buy_date 当日首根分钟 bar：signal_type = 'buy'
+          - 匹配 sell_date 当日末根分钟 bar：signal_type = 'sell'
+        """
+        from ..monitor.condition_snapshot import ConditionSnapshot
+        if not minute_bars:
+            return []
+
+        buy_date_set = set(str(d)[:10] for d in (buy_dates or []))
+        sell_date_set = set(str(d)[:10] for d in (sell_dates or []))
+
+        # 按日期分组：每组首根标记 buy，末根标记 sell
+        by_date: dict = {}
+        for i, bar in enumerate(minute_bars):
+            try:
+                dt = bar.datetime
+                d_key = dt.strftime("%Y-%m-%d")
+            except Exception:
+                continue
+            by_date.setdefault(d_key, []).append(i)
+
+        snapshots = []
+        for i, bar in enumerate(minute_bars):
+            try:
+                dt = bar.datetime
+                d_key = dt.strftime("%Y-%m-%d")
+            except Exception:
+                dt = None
+                d_key = ""
+
+            sig = None
+            indices = by_date.get(d_key, [])
+            if indices:
+                if d_key in buy_date_set and i == indices[0]:
+                    sig = "buy"
+                elif d_key in sell_date_set and i == indices[-1]:
+                    sig = "sell"
+
+            try:
+                snap = ConditionSnapshot(
+                    dt=dt or bar.dt,
+                    symbol=symbol,
+                    price=float(getattr(bar, "close_price", 0.0)),
+                    bar_index=i,
+                    signal_type=sig,
+                )
+            except Exception:
+                continue
+            snapshots.append(snap)
+        return snapshots
 
     def load_snapshots(self, symbol: str,
                        snapshots: List[ConditionSnapshot], bars: list = None,
@@ -817,5 +1073,7 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
         """兼容旧调用：单周期数据在日线面板显示。"""
         self._daily_panel.load_snapshots(
             symbol, snapshots, bars, buy_dates, sell_dates)
+        self._daily_panel._last_buy_dates = list(buy_dates or [])
+        self._daily_panel._last_sell_dates = list(sell_dates or [])
         self._mode_cb.setCurrentText("日线")
         self._status_lbl.setText(f"单周期 {len(bars or [])} 根")

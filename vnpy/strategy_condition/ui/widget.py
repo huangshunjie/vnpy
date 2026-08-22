@@ -494,6 +494,9 @@ class StrategyConditionWidget(QtWidgets.QWidget):
             self._monitor_tab = ConditionMonitorWidget()
             self._monitor_tab.lifecycle_info_changed.connect(
                 self._on_lifecycle_info)
+            # Monitor 分钟周期下拉变化时，自动用当前 symbol 重新拉双周期数据
+            self._monitor_tab.minute_interval_changed.connect(
+                self._on_monitor_minute_interval_changed)
             self._tab.addTab(self._monitor_tab, "🔍  条件监控  Monitor")
         except Exception as e:
             print(f"[SCE] Monitor Tab 加载失败: {e}")
@@ -725,7 +728,7 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         self._date_start.setStyleSheet(_EDIT_SS)
         left_col.addWidget(self._date_start)
         left_col.addWidget(_lbl("截止日期", _MUT, 11))
-        self._date_end = QtWidgets.QLineEdit("今日")
+        self._date_end = QtWidgets.QLineEdit("2026-07-19")
         self._date_end.setStyleSheet(_EDIT_SS)
         left_col.addWidget(self._date_end)
 
@@ -972,39 +975,50 @@ class StrategyConditionWidget(QtWidgets.QWidget):
                       buy_dates: list = None,
                       sell_dates: list = None) -> None:
         """
-        为指定股票生成条件监控快照并加载到 Monitor Tab。
-        内置两层缓存：
-          1. 如果 (symbol, strategy_hash, buy_dates, sell_dates) 命中缓存，
-             直接从缓存加载渲染，0 延迟。
-          2. 否则执行完整计算，结果存入缓存。
+        为指定股票生成条件监控快照并加载到 Monitor Tab（双周期）。
+
+        内置缓存：
+          1. 缓存键 = (symbol, strategy_hash, buy_dates, sell_dates, minute_key)
+          2. 命中 → 直接 load_layered_data，0 延迟
+          3. 未命中 → 加载日线 + 分钟线 + 各自生成 snapshots，存入缓存
+
+        加载层级：
+          - 日线 bars  + daily snapshots  → _daily_panel
+          - 分钟线 bars + minute snapshots → _minute_panel
+          - 调用 _monitor_tab.load_layered_data(...) 一推双面板
         """
         if self._monitor_tab is None:
             return
         if not self._strategy:
             return
 
-        # ── 缓存 key ──
+        # ── 缓存 key（考虑分钟周期，保证切换 5m/15m 后不命中旧 cache）──
         buy_dates = buy_dates or []
         sell_dates = sell_dates or []
+        minute_key = self._monitor_tab.minute_interval_key()
         cache_key = (
             symbol,
             self._strategy_hash(),
             tuple(buy_dates),
             tuple(sell_dates),
+            minute_key,
         )
 
         # ── 缓存命中：直接渲染 ──
         cached = self._snapshot_cache.get(cache_key)
         if cached is not None:
-            snapshots, bars = cached
+            (daily_snapshots, daily_bars,
+             minute_snapshots, minute_bars) = cached
             print(
-                f"[SCE] Monitor 缓存命中 {symbol} "
-                f"({len(snapshots)} snapshots, {len(bars)} bars)",
+                f"[SCE] Monitor 缓存命中 {symbol} ({minute_key}) "
+                f"daily={len(daily_bars)}/{len(daily_snapshots)}, "
+                f"minute={len(minute_bars)}/{len(minute_snapshots)}",
                 flush=True,
             )
-            self._monitor_tab.load_snapshots(
-                symbol, snapshots,
-                bars=bars,
+            self._monitor_tab.load_layered_data(
+                symbol,
+                daily_snapshots, daily_bars,
+                minute_snapshots, minute_bars,
                 buy_dates=buy_dates,
                 sell_dates=sell_dates,
             )
@@ -1012,58 +1026,118 @@ class StrategyConditionWidget(QtWidgets.QWidget):
             return
 
         # ── 缓存未命中：计算快照 ──
-        print(f"[SCE] _feed_monitor: computing for {symbol}", flush=True)
+        print(f"[SCE] _feed_monitor: computing for {symbol} ({minute_key})",
+              flush=True)
+        # 初始化变量为 None，在 try 块内赋值
+        daily_bars = None
+        minute_bars = None
+        daily_snapshots = None
+        minute_snapshots = None
         try:
             n_bars = self._nbars_sp.value()
 
-            # 优先复用 Chart Tab 已加载的原始 bars
+            # 1. 优先复用 Chart Tab 已加载的原始 bars 作为日线
             chart_raw_bars = getattr(self._kline_tab, '_last_raw_bars', None)
             if chart_raw_bars and len(chart_raw_bars) > 0:
-                bars = [_BarAdapter(b) for b in chart_raw_bars]
+                daily_bars = [_BarAdapter(b) for b in chart_raw_bars]
             else:
                 bars_dict = self._load_bars([symbol], n_bars)
-                bars = bars_dict.get(symbol, [])
+                # _load_bars 返回的是原始 BarData（只有 .close_price），
+                # 而 generate_snapshots 内部 _evaluate_bar 用 .close，
+                # 需 _BarAdapter 包装一层
+                raw_daily = bars_dict.get(symbol, [])
+                daily_bars = [_BarAdapter(b) for b in raw_daily]
 
-            if not bars:
-                print(f"[SCE] _feed_monitor: no bars for {symbol}")
+            if not daily_bars:
+                print(f"[SCE] _feed_monitor: no daily bars for {symbol}")
                 return
 
+            # 2. 加载分钟线 bars（从数据库拉取，不依赖 chart tab）
+            minute_interval = self._minute_key_to_interval(minute_key)
+            minute_bars = self._load_minute_bars_for_monitor(
+                symbol, daily_bars, minute_interval)
+
+            # 3. 生成 daily snapshots
             from ..monitor.condition_monitor_engine import ConditionMonitorEngine
             from ..engine.condition_engine import ConditionEngine
             ce = ConditionEngine()
             monitor_eng = ConditionMonitorEngine(ce)
 
-            if len(bars) >= 200:
+            if len(daily_bars) >= 200:
                 monitor_warmup = 60
-            elif len(bars) >= 100:
+            elif len(daily_bars) >= 100:
                 monitor_warmup = 30
             else:
-                monitor_warmup = min(10, max(1, len(bars) // 4))
+                monitor_warmup = min(10, max(1, len(daily_bars) // 4))
 
-            snapshots = monitor_eng.generate_snapshots(
+            daily_snapshots = monitor_eng.generate_snapshots(
                 symbol=symbol,
-                bars=bars,
+                bars=daily_bars,
                 strategy=self._strategy,
                 warmup=monitor_warmup,
                 buy_dates=buy_dates,
                 sell_dates=sell_dates,
             )
             print(
-                f"[SCE] _feed_monitor: {len(snapshots)} snapshots "
+                f"[SCE] _feed_monitor: {len(daily_snapshots)} daily snapshots "
                 f"(warmup={monitor_warmup})",
                 flush=True,
             )
+
+            # 4. 生成 minute snapshots（在分钟线上重新计算）
+            minute_snapshots = []
+            if minute_bars:
+                if len(minute_bars) >= 500:
+                    minute_warmup = 100
+                elif len(minute_bars) >= 200:
+                    minute_warmup = 60
+                else:
+                    minute_warmup = min(20, max(1, len(minute_bars) // 4))
+                try:
+                    minute_snapshots = monitor_eng.generate_snapshots(
+                        symbol=symbol,
+                        bars=minute_bars,
+                        strategy=self._strategy,
+                        warmup=minute_warmup,
+                        buy_dates=buy_dates,
+                        sell_dates=sell_dates,
+                    )
+                    print(
+                        f"[SCE] _feed_monitor: {len(minute_snapshots)} "
+                        f"minute snapshots ({minute_key}, warmup={minute_warmup})",
+                        flush=True,
+                    )
+                except Exception as e:
+                    # 关键：只 print+记日志,不要 raise,
+                    # 否则外层 try/except 会把整个 _feed_monitor 当作失败,
+                    # 走降级路径（且该路径会清空 minute_bars,导致 UI 显示
+                    # "5分钟 0 根"+"缺少5分钟数据"）。
+                    # 后续 _monitor_tab.load_layered_data 内部有
+                    # _build_minute_snapshots_fallback 兜底。
+                    print(f"[SCE] minute snapshots 生成失败: {e}")
+                    import traceback as _tb_snap
+                    _tb_snap.print_exc()
+                    minute_snapshots = []
 
             # 回测结果的卖出日期是权威来源
             effective_sell_dates = sell_dates
 
             # ── 存入缓存 ──
-            self._snapshot_cache[cache_key] = (snapshots, bars)
+            # 关键：即使 minute_snapshots 为空（生成失败）也照常缓存，
+            # 因为 minute_bars 是有效的（数据库加载阶段已成功）。
+            # load_layered_data 内部有 `_build_minute_snapshots_fallback`
+            # 会用 bars+buy_dates/sell_dates 重建。
+            self._snapshot_cache[cache_key] = (
+                daily_snapshots, daily_bars,
+                minute_snapshots, minute_bars,
+            )
             self._snapshot_cache_key = cache_key
 
-            self._monitor_tab.load_snapshots(
-                symbol, snapshots,
-                bars=bars,
+            # ── 推双周期面板 ──
+            self._monitor_tab.load_layered_data(
+                symbol,
+                daily_snapshots, daily_bars,
+                minute_snapshots, minute_bars,
                 buy_dates=buy_dates,
                 sell_dates=effective_sell_dates,
             )
@@ -1073,6 +1147,36 @@ class StrategyConditionWidget(QtWidgets.QWidget):
             import traceback
             print(f"[SCE] Monitor 快照生成失败: {e}")
             traceback.print_exc()
+            # 降级：哪怕 snapshots 生成失败，也要保证 K 线画出来
+            # （条件波形可能没数据，但至少 K 线 + 成交量能看到）
+            try:
+                if daily_bars:
+                    # 关键修复：minute_bars 不要清空！
+                    # 它的赋值（line ~1054）在 try 块顶部完成，
+                    # 与 generate_snapshots 失败无关。
+                    # load_layered_data 内部有 _build_minute_snapshots_fallback
+                    # 兜底（用 bars+signals 重建 snapshots）。
+                    # 同样的，minute_snapshots 已在 try 块内被赋值（即使为空），
+                    # 用其当前真实值，不要硬编码 []。
+                    self._monitor_tab.load_layered_data(
+                        symbol,
+                        daily_snapshots or [], daily_bars,
+                        minute_snapshots if minute_snapshots else [],
+                        minute_bars if minute_bars else [],
+                        buy_dates=buy_dates or [],
+                        sell_dates=sell_dates or [],
+                    )
+                    print(
+                        f"[SCE] 降级到 K 线模式："
+                        f"{len(daily_bars)} 日线, "
+                        f"{len(minute_bars) if minute_bars else 0} 分钟 "
+                        f"(daily_snapshots={len(daily_snapshots or [])})",
+                        flush=True,
+                    )
+            except Exception as e2:
+                print(f"[SCE] 降级也失败: {e2}")
+                import traceback as _tb
+                _tb.print_exc()
 
     def _on_tab_changed(self, idx: int) -> None:
         """切换到 Monitor Tab 时，使用缓存快速展示"""
@@ -1088,6 +1192,77 @@ class StrategyConditionWidget(QtWidgets.QWidget):
         sell_dates = getattr(self._kline_tab, "_last_sell_dates", [])
         # _feed_monitor 内部会先查缓存，命中则 0 延迟
         self._feed_monitor(symbol, buy_dates=buy_dates, sell_dates=sell_dates)
+
+    def _on_monitor_minute_interval_changed(self) -> None:
+        """
+        Monitor Tab 分钟周期下拉变化时，主动重新拉取双周期数据。
+        缓存 key 已包含 minute_key，所以旧 cache 自然会失效。
+        """
+        if self._monitor_tab is None:
+            return
+        symbol = getattr(self._kline_tab, "_current_symbol", "")
+        if not symbol:
+            return
+        buy_dates  = getattr(self._kline_tab, "_last_buy_dates",  [])
+        sell_dates = getattr(self._kline_tab, "_last_sell_dates", [])
+        print(f"[SCE] Monitor 分钟周期变化，重建 cache", flush=True)
+        self._feed_monitor(symbol, buy_dates=buy_dates, sell_dates=sell_dates)
+
+    @staticmethod
+    def _minute_key_to_interval(key: str):
+        """
+        将 monitor 面板的分钟 key（"1m"/"5m"/"15m"/"30m"/"1h"）
+        转换为 vnpy.trader.constant.Interval 枚举。
+        """
+        from vnpy.trader.constant import Interval
+        return {
+            "1m":  Interval.MINUTE,
+            "5m":  Interval.MINUTE_5,
+            "15m": Interval.MINUTE_15,
+            "30m": Interval.MINUTE_30,
+            "1h":  Interval.HOUR,
+        }.get(key, Interval.MINUTE_5)
+
+    def _load_minute_bars_for_monitor(
+        self, symbol: str, daily_bars: list, minute_interval,
+    ) -> list:
+        """
+        加载分钟线 bars 用于 Monitor Tab 下方面板。
+
+        策略：
+          1. 从 daily_bars 推断日线范围 [start_date, end_date]
+          2. 调用 _load_bars_by_date_range 拉取分钟数据
+          3. 失败/为空 → 返回 []（由 load_layered_data 决定是否降级）
+
+        性能：上限 20000 根 — 用户要求"有多少就处理多少"，
+              5min 历史段会很多（22~30 万根），但渲染需要保护，
+              20000 根 ≈ 7 年 5min 数据，足够覆盖回测全周期。
+        """
+        try:
+            if not daily_bars:
+                return []
+            first_dt = getattr(daily_bars[0], "datetime", None)
+            last_dt = getattr(daily_bars[-1], "datetime", None)
+            if first_dt is None or last_dt is None:
+                return []
+            start_d = first_dt.date() if hasattr(first_dt, "date") else first_dt
+            end_d = last_dt.date() if hasattr(last_dt, "date") else last_dt
+
+            bars = self._load_bars_by_date_range(
+                symbol, minute_interval, start_d, end_d)
+
+            MAX_MINUTE_BARS = 20000
+            if len(bars) > MAX_MINUTE_BARS:
+                bars = bars[-MAX_MINUTE_BARS:]
+            print(
+                f"[SCE] _load_minute_bars_for_monitor {symbol}: "
+                f"interval={minute_interval}, n={len(bars)}",
+                flush=True,
+            )
+            return bars
+        except Exception as e:
+            print(f"[SCE] 加载分钟线失败 {symbol}: {e}")
+            return []
 
     def _on_signal_selected(self, rec) -> None:
         """
@@ -1866,46 +2041,109 @@ class StrategyConditionWidget(QtWidgets.QWidget):
 
         return bars_dict
 
-    def _load_bars_by_date_range(self, symbol: str, interval, 
+    def _load_bars_by_date_range(self, symbol: str, interval,
                                  start_date, end_date) -> list:
         """
         按日期范围加载指定周期的K线数据
-        
+
         Args:
             symbol: 股票代码（如 "600000.SSE"）
             interval: K线周期（Interval枚举）
             start_date: 起始日期（date对象）
             end_date: 结束日期（date对象）
-            
+
         Returns:
             K线列表（_BarAdapter包装后的）
+
+        健壮性：分钟数据常常下载不连续（最近30天没有5min数据很常见），
+        所以会做两次查询 —— 先用用户的窗口，如果为空就把 end_date 扩到
+        2099-12-31 重试一次，拿回最近一次下载的 5min 数据，再按 end_date
+        截断返回。
         """
         from vnpy.trader.database import get_database
         from vnpy.trader.constant import Exchange
         from datetime import datetime
-        
+
         db = get_database()
         parts = symbol.split(".")
         code = parts[0]
         exch_str = parts[1] if len(parts) > 1 else ""
-        
+
         try:
             exchange = Exchange(exch_str)
         except Exception:
             exchange = Exchange.SSE if code.startswith("6") else Exchange.SZSE
-        
+
         start_dt = datetime.combine(start_date, datetime.min.time())
-        end_dt = datetime.combine(end_date, datetime.max.time())
-        
-        try:
-            raw = db.load_bar_data(
-                symbol=code, exchange=exchange,
-                interval=interval,
-                start=start_dt, end=end_dt
-            )
-            return [_BarAdapter(b) for b in raw] if raw else []
-        except Exception:
+        end_dt   = datetime.combine(end_date, datetime.max.time())
+
+        def _query(start, end):
+            try:
+                raw = db.load_bar_data(
+                    symbol=code, exchange=exchange,
+                    interval=interval,
+                    start=start, end=end,
+                )
+                return raw or []
+            except Exception as e:
+                print(
+                    f"[SCE] _load_bars_by_date_range query error: "
+                    f"{symbol} {interval} {start}..{end} -> "
+                    f"{type(e).__name__}: {e}",
+                    flush=True,
+                )
+                return None
+
+        # ── 第一次：用用户给的时间窗口 ──
+        raw = _query(start_dt, end_dt)
+        if raw is None:
             return []
+        if raw:
+            n = len(raw)
+            first_dt = raw[0].datetime
+            last_dt  = raw[-1].datetime
+            print(
+                f"[SCE] _load_bars_by_date_range OK: "
+                f"{symbol} {interval.value if hasattr(interval, 'value') else interval} "
+                f"range={start_dt.date()}..{end_dt.date()} -> {n} bars "
+                f"({first_dt} .. {last_dt})",
+                flush=True,
+            )
+            return [_BarAdapter(b) for b in raw]
+
+        # ── 第二次：放宽到 2099-12-31，找最近一次下载到的历史 5min ──
+        #   场景：用户只下载过 5min 的历史段（不是连续的），当前 end_date
+        #   范围内拿不到任何数据。扩大 end 之后再按 end_dt 截断。
+        far_end = datetime(2099, 12, 31, 23, 59, 59)
+        raw2 = _query(start_dt, far_end)
+        if raw2 is None or not raw2:
+            print(
+                f"[SCE] _load_bars_by_date_range EMPTY: "
+                f"{symbol} {interval} range={start_dt.date()}..{end_dt.date()} "
+                f"(also tried {start_dt.date()}..2099-12-31)",
+                flush=True,
+            )
+            return []
+        # 按 end_dt 截断
+        #   bar.datetime 通常是 offset-aware（CST+08:00），
+        #   而 end_dt = datetime.combine(date, max.time()) 是 naive。
+        #   直接比较会报 "can't compare offset-naive and offset-aware"，
+        #   所以统一用第一个 bar 的 tzinfo 给 end_dt 补上。
+        if raw2 and getattr(raw2[0].datetime, "tzinfo", None) is not None:
+            cutoff = end_dt.replace(tzinfo=raw2[0].datetime.tzinfo)
+        else:
+            cutoff = end_dt
+        raw2 = [b for b in raw2 if b.datetime <= cutoff]
+        n = len(raw2)
+        first_dt = raw2[0].datetime if raw2 else None
+        last_dt  = raw2[-1].datetime if raw2 else None
+        print(
+            f"[SCE] _load_bars_by_date_range WIDENED: "
+            f"{symbol} {interval} user_range={start_dt.date()}..{end_dt.date()} "
+            f"-> {n} bars (after truncate {first_dt}..{last_dt})",
+            flush=True,
+        )
+        return [_BarAdapter(b) for b in raw2]
 
     def _update_estimated_start_date(self) -> None:
         """根据当前K线数量和周期计算预估起始日期并显示"""
