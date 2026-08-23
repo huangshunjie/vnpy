@@ -217,6 +217,9 @@ class DateAxis(pg.AxisItem):
 class KlineChartWidget(QtWidgets.QWidget):
     """K线主图 + 成交量副图 + 买入/卖出信号标记 + 十字线悬停。"""
 
+    # 信号：当用户点击K线时发射，参数为点击的日期(datetime)
+    bar_clicked = QtCore.Signal(object)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._bars:         list = []
@@ -284,7 +287,7 @@ class KlineChartWidget(QtWidgets.QWidget):
             rateLimit=60, slot=self._on_mouse_moved)
 
         # Connect mouse click for measure tool
-
+        self._main_plot.scene().sigMouseClicked.connect(self._on_mouse_clicked)
 
 
         # -- Dynamic Y-axis: auto-update when user scrolls/zooms X axis --
@@ -529,6 +532,35 @@ class KlineChartWidget(QtWidgets.QWidget):
                 vol_ceiling = max(vol_p95, vol_max * 0.6)
                 vol_padding = vol_ceiling * 0.05
                 self._vol_plot.setYRange(0, vol_ceiling + vol_padding, padding=0)
+
+    def _on_mouse_moved(self, evt) -> None:
+        pos = evt[0]
+        if not self._main_plot.sceneBoundingRect().contains(pos):
+            return
+        mp = self._main_plot.vb.mapSceneToView(pos)
+        x  = int(round(mp.x()))
+        self._vline.setPos(mp.x())
+        self._hline.setPos(mp.y())
+        if not (0 <= x < len(self._bars)):
+            return
+        o, h, l, c = self._bars[x]
+        vol  = self._volumes[x] if x < len(self._volumes) else 0
+        dt = self._datetimes[x] if x < len(self._datetimes) else None
+        chg  = ((c - self._bars[x-1][3]) / self._bars[x-1][3] * 100
+                if x > 0 else 0.0)
+        cs   = f"+{chg:.2f}%" if chg >= 0 else f"{chg:.2f}%"
+        cc   = _C_UP if chg >= 0 else _C_DN
+    def _on_mouse_clicked(self, evt):
+        """鼠标点击时发射bar_clicked信号"""
+        if not self._dates:
+            return
+        pos = evt.scenePos()
+        if self._main_plot.sceneBoundingRect().contains(pos):
+            mouse_point = self._main_plot.vb.mapSceneToView(pos)
+            idx = int(mouse_point.x() + 0.5)
+            if 0 <= idx < len(self._datetimes):
+                clicked_date = self._datetimes[idx]
+                self.bar_clicked.emit(clicked_date)
 
     def _on_mouse_moved(self, evt) -> None:
         pos = evt[0]
