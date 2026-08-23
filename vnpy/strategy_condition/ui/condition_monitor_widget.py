@@ -690,22 +690,63 @@ class _PeriodMonitorPanel(QtWidgets.QWidget):
         """定位目标时刻；日线联动只使用目标日期前的完整日线。"""
         if dt is None or not self._current_bars:
             return None
+        # 统一去 tz：bar 可能是 aware (tzinfo=+08:00)，外部传入的 dt 可能是 naive，
+        # 直接比较会报 can't compare offset-naive and offset-aware datetimes。
+        try:
+            from datetime import timezone
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
+        except Exception:
+            pass
         target_index = None
         for index, bar in enumerate(self._current_bars):
             bar_dt = getattr(bar, "dt", getattr(bar, "datetime", None))
             if bar_dt is None:
                 continue
-            if completed_daily and bar_dt.date() >= dt.date():
+            try:
+                if bar_dt.tzinfo is not None:
+                    bar_dt_cmp = bar_dt.replace(tzinfo=None)
+                else:
+                    bar_dt_cmp = bar_dt
+            except Exception:
+                bar_dt_cmp = bar_dt
+            if completed_daily and bar_dt_cmp.date() >= dt.date():
                 continue
-            if bar_dt <= dt:
+            if bar_dt_cmp <= dt:
                 target_index = index
         if target_index is None:
             return None
         chart = self._kline_tab._chart
         chart._vline.setPos(target_index)
         chart._vline.setVisible(True)
+        # ── v4 关键修复：滚动 X 轴让目标 bar 进入视口 ───────────────
+        # setPos 只改 vline 数据位置，不动 ViewBox 的可视范围。
+        # 若 target_index 远在视口外，vline 会被裁掉看不见。
+        main_plot = chart._main_plot
+        try:
+            cur_xrange = main_plot.getViewBox().viewRange()[0]
+            cur_width = cur_xrange[1] - cur_xrange[0]
+            # 目标 bar 放到视口右 2/3 处
+            new_left = max(0, target_index - int(cur_width * 0.35))
+            new_right = new_left + cur_width
+            main_plot.setXRange(new_left, new_right, padding=0)
+            # waveform 子图已 setXLink，主图一动就同步
+        except Exception as e:
+            print(f"[focus_datetime v4] setXRange 失败: {e}")
+        # ─────────────────────────────────────────────────────────
         self._waveform_view.set_vline_pos(target_index)
+        # 强制 vline 提到所有 plot 之上
+        try:
+            chart._vline.setZValue(1000)
+        except Exception:
+            pass
         target_bar = self._current_bars[target_index]
+        # 强制重绘
+        try:
+            main_plot.getViewBox().update()
+            chart._main_plot.replot() if hasattr(chart._main_plot, 'replot') else None
+        except Exception:
+            pass
         return getattr(target_bar, "dt", getattr(target_bar, "datetime", None))
 
 
@@ -799,15 +840,31 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
                 self.minute_interval_key())
 
     def _connect_daily_click_handler(self):
-        """连接日线K线点击处理器"""
+        """连接日线K线点击处理器（日线→分钟联动）"""
         try:
-            if hasattr(self._daily_panel, '_kline_tab'):
-                kline_tab = self._daily_panel._kline_tab
-                if hasattr(kline_tab, '_chart'):
-                    kline_tab._chart.bar_clicked.connect(
-                        self._on_daily_bar_clicked)
+            # 避免重复连接
+            if getattr(self, '_bar_clicked_connected', False):
+                return
+
+            # ConditionMonitorWidget 自身没有 _kline_tab；
+            # 真正的 KlineChartWidget 在 self._daily_panel._kline_tab._chart
+            daily_panel = getattr(self, '_daily_panel', None)
+            if daily_panel is None:
+                return
+            kline_tab = getattr(daily_panel, '_kline_tab', None)
+            if kline_tab is None:
+                return
+            chart = getattr(kline_tab, '_chart', None)
+            if chart is None or not hasattr(chart, 'bar_clicked'):
+                return
+
+            chart.bar_clicked.connect(self._on_daily_bar_clicked)
+            self._bar_clicked_connected = True
+            print("[联动] 日线K线点击事件已连接")
         except Exception as e:
-            print(f"[联动] 连接日线点击失败: {e}")
+            print(f"[联动] 连接失败: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _on_daily_bar_clicked(self, clicked_dt):
         """处理日线K线点击事件"""
@@ -902,23 +959,38 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
         return result
 
     def _update_minute_view_for_date(self, target_date, signals):
-        """更新分钟K线视图，聚焦到指定日期"""
+        """更新分钟K线视图，聚焦到指定日期
+
+        关键修复（2026-08-23，二次修复）：``focus_datetime`` 实际定义在
+        ``_PeriodMonitorPanel`` 上（不是 ``KlineViewTab``）。原代码误对
+        KlineViewTab 调用，hasattr 永远为 False，vline 不会移动。
+
+        这里改为直接对 ``_minute_panel`` 调用 ``focus_datetime``，
+        panel 内部会用 ``_kline_tab._chart._vline.setPos`` + 同步波形区 +
+        同步信息栏。传入当天 12:00 + completed_daily=True，让 vline 落
+        在 target_date 当天最后已完成的 minute bar 上。
+        """
         try:
             if not hasattr(self, '_minute_panel'):
                 return
-
             minute_panel = self._minute_panel
-            if not hasattr(minute_panel, '_kline_tab'):
+
+            # 缓存信号上下文
+            self._pending_signals = dict(signals or {})
+
+            if not hasattr(minute_panel, 'focus_datetime'):
+                print("[联动] _PeriodMonitorPanel 缺少 focus_datetime，无法移动 vline")
                 return
 
-            kline_tab = minute_panel._kline_tab
-
-            # 调用 focus_on_date 方法
-            if hasattr(kline_tab, 'focus_on_date'):
-                kline_tab.focus_on_date(target_date, signals)
-            else:
-                print(f"[联动] KlineViewTab 缺少 focus_on_date 方法")
-
+            from datetime import datetime, time, timezone, timedelta
+            # 当天 12:00 作为目标时刻；completed_daily=True 时
+            # focus_datetime 会跳过同日 bar，取 <= 目标时刻的最后一根
+            # minute bar（恰是 target_date 当天最后已完成的 bar）
+            # 加上 +08:00 与 K线 bar 的 tz 对齐（focus_datetime 内部会
+            # 先 replace(tzinfo=None) 再比较，保持语义一致）。
+            tz = timezone(timedelta(hours=8))
+            dt = datetime.combine(target_date, time(12, 0), tzinfo=tz)
+            minute_panel.focus_datetime(dt, completed_daily=True)
         except Exception as e:
             print(f"[联动] 更新分钟视图失败: {e}")
             import traceback
