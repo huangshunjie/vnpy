@@ -1,0 +1,171 @@
+========= _on_outer_daily_bar_clicked =========
+
+    def _on_outer_daily_bar_clicked(self, focus_dt, signals) -> None:
+        """V        print(f"[联动V24][{type(self).__name__}] 收到 daily_bar_clicked: "
+              f"focus_dt={focus_dt}, self._interval={getattr(self, '_interval', None)}")
+8 全屏窗口监听主 Monitor 的日线点击，独立移动 vline（无半透明、无中转）。
+        V18 修复：根据自身 _interval 决定 focus_datetime 的 completed_daily 参数
+            - 日线全屏 → completed_daily=False（直接跳该日）
+            - 分钟全屏 → completed_daily=True（跳该日 15:00 收盘后位置）
+        之前硬编码 False 导致分钟全屏 vline 总跳到 9:30 开盘位置而非用户点击日。
+        """
+        try:
+            chart = getattr(self, '_chart', None)
+            if chart is None:
+                return
+            if focus_dt is None:
+                return
+            # V18：根据本窗口的周期判定 completed_daily
+            my_interval = getattr(self, '_interval', None) or getattr(chart, '_interval', None)
+            # Interval.MINUTE_* 都算"分钟线全屏"
+            is_minute_window = False
+            try:
+                from vnpy.trader.constant import Interval as _I
+                if my_interval is not None and my_interval != _I.DAILY:
+                    is_minute_window = True
+            except Exception:
+                # 退化：用名称判定
+                is_minute_window = (str(my_interval).upper().find('MINUTE') >= 0)
+            completed_daily = not is_minute_window
+            # 复用 _FullscreenChart 已有的 focus_datetime 接口（如果存在）
+            if hasattr(chart, 'focus_datetime'):
+                chart.focus_datetime(focus_dt, completed_daily=completed_daily)
+                print(f"[KlineView][V18] 全屏窗口收到外部 daily_bar_clicked: focus_dt={focus_dt}, "
+                      f"my_interval={my_interval}, is_minute={is_minute_window}, "
+                      f"completed_daily={completed_daily}, vline 已移动")
+            else:
+                # 兜底：直接定位 vline（按 _datetimes 找最近）
+                dts = getattr(chart, '_datetimes', None)
+                if dts:
+                    target = focus_dt
+                    # 分钟线全屏：把目标移到该日 15:00 附近
+                    if is_minute_window:
+                        try:
+                            from datetime import datetime, time as _time
+                            target = datetime.combine(focus_dt.date(), _time(15, 0))
+                        except Exception:
+                            pass
+                    best_idx = 0
+                    best_diff = None
+                    for i, dt in enumerate(dts):
+                        if dt is None:
+                            continue
+                        try:
+                            diff = abs((dt - target).total_seconds())
+                        except Exception:
+                            continue
+                        if best_diff is None or diff < best_diff:
+                            best_diff = diff
+                            best_idx = i
+                    vline = getattr(chart, '_vline', None)
+                    if vline is not None:
+                        vline.setPos(best_idx)
+                        print(f"[KlineView][V18] 全屏窗口 vline 兜底移动 idx={best_idx}, focus_dt={focus_dt}, is_minute={is_minute_window}")
+        except Exception as _exc:
+            import traceback
+            traceback.print_exc()
+            print(f"[KlineView][V18] 全屏窗口 _on_outer_daily_bar_clicked 失败: {_exc}")
+
+
+========= _on_mouse_clicked_for_link =========
+
+    def _on_mouse_clicked_for_link(self, evt) -> None:
+        """点击主图区域，解析最近 bar 索引，转发 datetime 给监听者。"""
+        try:
+            print(f"[KlineView][DEBUG] _on_mouse_clicked_for_link 进入, evt={evt}, type={type(evt).__name__ if evt else None}")
+            if evt is None:
+                print(f"[KlineView][DEBUG] _on_mouse_clicked_for_link 退出原因: None")
+                return
+            # V7 修复：兼容 QtCore.Qt.MouseButton 与 QtWidgets.Qt.MouseButton
+            # pyqtgraph 传过来的是 QtWidgets.Qt.MouseButton.LeftButton，源码原先用 QtCore.Qt.MouseButton.LeftButton 严格 != 比较失败
+            # 改为 int 值比较（LeftButton == 1）
+            btn = getattr(evt, 'button', None)
+            try:
+                btn_int = int(btn) if btn is not None else -1
+            except Exception:
+                btn_int = -1
+            if btn_int != 1:  # Qt.LeftButton == 1
+                # 容忍右键/中键也走一遍（用于调试），不直接 return
+                print(f"[KlineView][DEBUG] _on_mouse_clicked_for_link 收到非左键 (btn_int={btn_int}, btn={btn})，按 V7 兼容规则继续")
+            if not self._main_plot.sceneBoundingRect().contains(evt.scenePos()):
+                print(f"[KlineView][DEBUG] _on_mouse_clicked_for_link 退出原因: 点击不在主图区域")
+                return
+            mp = self._main_plot.vb.mapSceneToView(evt.scenePos())
+            x = int(round(mp.x()))
+            if not (0 <= x < len(self._bars)):
+                print(f"[KlineView][DEBUG] _on_mouse_clicked_for_link 退出原因: x={x} 越界 ({len(self._bars)})")
+                return
+            if self._datetimes and x < len(self._datetimes):
+                dt = self._datetimes[x]
+            else:
+                from datetime import datetime as _dt
+                dt = _dt.now()
+            print(f"[KlineView][DEBUG] 全屏K线被点击: x={x}, dt={dt}, 发射 bar_clicked")
+            # V4 方案A: 先发信号（让 window 转出去）
+            self.bar_clicked.emit(dt)
+            # V4 方案B: 再走 fallback 路径 —— 通过 parent window 找 owner_monitor 直接调
+            try:
+                owner_monitor = None
+                # 路径1: 父窗口（即 _KlineFullscreenWindow）直接挂了 _owner_monitor
+                par = self.parent()
+                while par is not None and not isinstance(par, _KlineFullscreenWindow):
+                    par = par.parent() if hasattr(par, 'parent') else None
+                if par is not None and getattr(par, '_owner_monitor', None) is not None:
+                    owner_monitor = par._owner_monitor
+                print(f"[KlineView][DEBUG] 方案B owner_monitor={type(owner_monitor).__name__ if owner_monitor else None}")
+                if owner_monitor is not None:
+                    # 重要：日线的 00:00 datetime 需要补成 23:59，否则 _update_minute_view_for_date 会过滤掉
+                    from datetime import time as _time
+                    if dt.hour == 0 and dt.minute == 0 and dt.second == 0:
+                        focus_dt = dt.replace(hour=23, minute=59, second=59)
+                    else:
+                        focus_dt = dt
+                    owner_monitor._on_daily_bar_clicked_from_outer(focus_dt, from_fullscreen=True)
+                    print(f"[KlineView][DEBUG] 方案B 已直接调用 owner_monitor._on_daily_bar_clicked_from_outer, focus_dt={focus_dt}")
+            except Exception as _exc2:
+                print(f"[KlineView] 方案B fallback 失败: {_exc2}")
+        except Exception as _exc:
+            print(f"[KlineView] _on_mouse_clicked_for_link 异常: {_exc}")
+
+    # V22 关键修复：_FullscreenChart 没有 focus_datetime 方法，
+    # 但 condition_monitor_widget.py 在全屏窗口上调用 self._kline_tab.focus_datetime()。
+    # 这里补齐与 _PeriodMonitorPanel.focus_datetime 语义一致的接口。
+
+========= _on_x_range_changed =========
+
+    def _on_x_range_changed(self, *_args) -> None:
+        """X轴范围变化时动态更新Y轴范围。"""
+        if not getattr(self, "_auto_yaxis", True):
+            return
+        if not self._bars:
+            return
+        n = len(self._bars)
+        xmin, xmax = self._main_plot.viewRange()[0]
+        i_start = max(0, int(xmin))
+        i_end = min(n, int(xmax) + 1)
+        if i_start >= i_end:
+            return
+
+        # K线Y轴：可见区间的 low/high + 5% padding
+        vis_bars = self._bars[i_start:i_end]
+        if vis_bars:
+            price_lo = min(b[2] for b in vis_bars)
+            price_hi = max(b[1] for b in vis_bars)
+            price_range = price_hi - price_lo
+            if price_range <= 0:
+                price_range = price_hi * 0.1 or 1.0
+            padding = price_range * 0.05
+            self._main_plot.setYRange(
+                price_lo - padding, price_hi + padding, padding=0)
+
+        # 成交量Y轴：可见区间的P95百分位 + 5% padding
+        vis_vols = self._volumes[i_start:i_end]
+        if vis_vols:
+            import numpy as np
+            vols_arr = np.array([v for v in vis_vols if v > 0])
+            if len(vols_arr) > 0:
+                vol_p95 = float(np.percentile(vols_arr, 95))
+                vol_max = float(vols_arr.max())
+                vol_ceiling = max(vol_p95, vol_max * 0.6)
+                vol_padding = vol_ceiling * 0.05
+                self._vol_plot.setYRange(0, vol_ceiling + vol_padding, padding=0)

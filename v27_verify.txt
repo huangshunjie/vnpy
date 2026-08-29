@@ -1,0 +1,8 @@
+=== V27 —È÷§ ===
+OK  1 V27__init__
+OK  1 V27_click_handler
+OK  1 V18_focus_print
+OK  1 V8_listen_print
+OK  1 V18_fallback
+OK  1 DEBUG_owner
+=== DONE ===

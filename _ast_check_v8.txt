@@ -1,0 +1,18 @@
+CLASS: _KlineFullscreenWindow L1175
+  L1179-1179: Assign -
+  L1181-1344: FunctionDef __init__
+  L1346-1393: FunctionDef _setup_vline_sync
+  L1395-1409: FunctionDef _on_ma_toggle
+  L1411-1413: FunctionDef _on_fs_measure_toggle
+  L1422-1458: FunctionDef _on_outer_daily_bar_clicked
+  L1460-1486: FunctionDef closeEvent
+  L1488-1492: FunctionDef keyPressEvent
+CLASS: _FullscreenChart L1495
+  L1499-1499: Assign -
+  L1501-1526: FunctionDef __init__
+  L1528-1579: FunctionDef _build_ui
+  L1585-1676: FunctionDef _redraw
+  L1680-1736: FunctionDef _on_mouse_clicked_for_link
+  L1738-1783: FunctionDef mousePressEvent
+  L1785-1829: FunctionDef _on_mouse_moved
+  L1831-1835: FunctionDef _on_measure_toggle

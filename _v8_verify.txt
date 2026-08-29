@@ -1,0 +1,9 @@
+Syntax OK
+class CandlestickItem (line 47): ['__init__', '_draw', 'paint', 'boundingRect']
+class VolumeItem (line 129): ['__init__', '_draw', 'paint', 'boundingRect']
+class DateAxis (line 185): ['__init__', 'tickStrings']
+class KlineChartWidget (line 217): ['__init__', '_build_ui', 'set_volume_visible', 'set_ma_flags', 'load', 'clear', '_redraw', 'jump_to_trigger', 'set_auto_yaxis', '_on_x_range_changed', '_on_mouse_moved', '_on_mouse_clicked', '_on_mouse_moved']
+class _BarLoaderThread (line 617): ['__init__', 'run']
+class KlineViewTab (line 633): ['__init__', '_build_ui', 'show_symbol', '_on_bars_loaded', 'clear', '_on_manual_load', '_on_measure_toggle', '_get_ma_config', '_on_yaxis_toggle', '_on_vol_toggle', '_on_ma_toggle', 'set_waveform_data', '_on_fullscreen', '_load_bars']
+class _KlineFullscreenWindow (line 1175): ['__init__', '_setup_vline_sync', '_on_ma_toggle', '_on_fs_measure_toggle', '_on_outer_daily_bar_clicked']
+class _FullscreenChart (line 1495): ['__init__', '_build_ui', '_redraw', '_on_mouse_clicked_for_link', 'mousePressEvent', '_on_mouse_moved', '_on_measure_toggle']

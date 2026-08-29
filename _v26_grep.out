@@ -1,0 +1,41 @@
+File: vnpy/strategy_condition/ui/kline_view.py
+Exists: True
+Size: 89840 bytes
+================================================================================
+【1】含 [KlineView] 的行：
+  L1112:             print(f"[KlineView][DEBUG] _on_fullscreen: owner_panel={type(outer).__name__ if outer else None}, owner_monitor={type(owner_monitor).__name__ if owner_monitor else None}")
+  L1127:                     print(f"[KlineView][DEBUG] 全屏窗口注册到 monitor 失败: {_reg_exc}")
+  L1134:                         print(f"[KlineView][V8] 全屏窗口已监听 owner_monitor.daily_bar_clicked")
+  L1136:                     print(f"[KlineView][V8] 全屏窗口监听 daily_bar_clicked 失败: {_link_exc}")
+  L1138:                 print(f"[KlineView][DEBUG] 全屏窗口 owner_monitor 注入成功: {owner_monitor}")
+  L1140:                 print(f"[KlineView][DEBUG] 未找到 owner_monitor，全屏联动不生效！")
+  L1144:             print(f"[KlineView] 全屏窗口连接 owner_panel.bar_clicked 失败: {_exc}")
+  L1388:             print(f"[KlineView][DEBUG] _KlineFullscreenWindow 转发前: chart.bar_clicked={getattr(self._chart, 'bar_clicked', None)}, self.bar_clicked={self.bar_clicked}")
+  L1390:             print(f"[KlineView][DEBUG] _KlineFullscreenWindow bar_clicked 转发连接成功")
+  L1394:             print(f"[KlineView] _KlineFullscreenWindow 转发 bar_clicked 失败: {_exc}")
+  L1502:                 print(f"[KlineView][V18] 全屏窗口收到外部 daily_bar_clicked: focus_dt={focus_dt}, "
+  L1532:                         print(f"[KlineView][V18] 全屏窗口 vline 兜底移动 idx={best_idx}, focus_dt={focus_dt}, is_minute={is_minute_window}")
+  L1536:             print(f"[KlineView][V18] 全屏窗口 _on_outer_daily_bar_clicked 失败: {_exc}")
+  L1601:                 print(f"[KlineView][DEBUG] _FullscreenChart sigMouseClicked 已在 _build_ui 阶段连接")
+  L1603:             print(f"[KlineView] _FullscreenChart 绑定 sigMouseClicked 失败: {_exc}")
+  L1761:             print(f"[KlineView][DEBUG] _on_mouse_clicked_for_link 进入, evt={evt}, type={type(evt).__name__ if evt else None}")
+  L1763:                 print(f"[KlineView][DEBUG] _on_mouse_clicked_for_link 退出原因: None")
+  L1775:                 print(f"[KlineView][DEBUG] _on_mouse_clicked_for_link 收到非左键 (btn_int={btn_int}, btn={btn})，按 V7 兼容规则继续")
+  L1777:                 print(f"[KlineView][DEBUG] _on_mouse_clicked_for_link 退出原因: 点击不在主图区域")
+  L1782:                 print(f"[KlineView][DEBUG] _on_mouse_clicked_for_link 退出原因: x={x} 越界 ({len(self._bars)})")
+  L1789:             print(f"[KlineView][DEBUG] 全屏K线被点击: x={x}, dt={dt}, 发射 bar_clicked")
+  L1801:                 print(f"[KlineView][DEBUG] 方案B owner_monitor={type(owner_monitor).__name__ if owner_monitor else None}")
+  L1810:                     print(f"[KlineView][DEBUG] 方案B 已直接调用 owner_monitor._on_daily_bar_clicked_from_outer, focus_dt={focus_dt}")
+  L1812:                 print(f"[KlineView] 方案B fallback 失败: {_exc2}")
+  L1814:             print(f"[KlineView] _on_mouse_clicked_for_link 异常: {_exc}")
+  L1903:                     print(f"[KlineView][DEBUG] V7 兜底 mapToScene 失败: {_m_exc}")
+  L1914:                         print(f"[KlineView][DEBUG] V7 兜底 mousePressEvent: x={x}, dt={dt}")
+  L1928:                             print(f"[KlineView][DEBUG] V7 兜底已调用 owner_monitor, focus_dt={focus_dt}")
+  L1930:             print(f"[KlineView] V7 mousePressEvent 异常: {_exc}")
+
+【2】含 [联动V26] 的行：
+Traceback (most recent call last):
+  File "c:\Users\11229\Documents\GitHub\vnpy\_v26_grep.py", line 32, in <module>
+    print('  \u274c 没找到！')
+    ~~~~~^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'gbk' codec can't encode character '\u274c' in position 2: illegal multibyte sequence

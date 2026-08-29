@@ -550,35 +550,6 @@ class KlineChartWidget(QtWidgets.QWidget):
                 if x > 0 else 0.0)
         cs   = f"+{chg:.2f}%" if chg >= 0 else f"{chg:.2f}%"
         cc   = _C_UP if chg >= 0 else _C_DN
-    def _on_mouse_clicked(self, evt):
-        """鼠标点击时发射bar_clicked信号"""
-        if not self._dates:
-            return
-        pos = evt.scenePos()
-        if self._main_plot.sceneBoundingRect().contains(pos):
-            mouse_point = self._main_plot.vb.mapSceneToView(pos)
-            idx = int(mouse_point.x() + 0.5)
-            if 0 <= idx < len(self._datetimes):
-                clicked_date = self._datetimes[idx]
-                self.bar_clicked.emit(clicked_date)
-
-    def _on_mouse_moved(self, evt) -> None:
-        pos = evt[0]
-        if not self._main_plot.sceneBoundingRect().contains(pos):
-            return
-        mp = self._main_plot.vb.mapSceneToView(pos)
-        x  = int(round(mp.x()))
-        self._vline.setPos(mp.x())
-        self._hline.setPos(mp.y())
-        if not (0 <= x < len(self._bars)):
-            return
-        o, h, l, c = self._bars[x]
-        vol  = self._volumes[x] if x < len(self._volumes) else 0
-        dt = self._datetimes[x] if x < len(self._datetimes) else None
-        chg  = ((c - self._bars[x-1][3]) / self._bars[x-1][3] * 100
-                if x > 0 else 0.0)
-        cs   = f"+{chg:.2f}%" if chg >= 0 else f"{chg:.2f}%"
-        cc   = _C_UP if chg >= 0 else _C_DN
 
         # 格式化日期时间：日线只显示日期，分钟线显示日期+时间
         if dt is not None:
@@ -609,7 +580,17 @@ class KlineChartWidget(QtWidgets.QWidget):
             f"{mark}")
         self._info_bar.setTextFormat(QtCore.Qt.TextFormat.RichText)
 
-
+    def _on_mouse_clicked(self, evt):
+        """鼠标点击时发射bar_clicked信号"""
+        if not self._dates:
+            return
+        pos = evt.scenePos()
+        if self._main_plot.sceneBoundingRect().contains(pos):
+            mouse_point = self._main_plot.vb.mapSceneToView(pos)
+            idx = int(mouse_point.x() + 0.5)
+            if 0 <= idx < len(self._datetimes):
+                clicked_date = self._datetimes[idx]
+                self.bar_clicked.emit(clicked_date)
 
 
 # ── 后台数据加载线程 ─────────────────────────────────────────────────
@@ -721,6 +702,11 @@ class KlineViewTab(QtWidgets.QWidget):
         for _, name in self._interval_options:
             self._interval_cb.addItem(name)
         self._interval_cb.setCurrentIndex(0)
+        # V12-fix: 当前 tab 的 interval 枚举（用于全屏窗口识别日/分钟线）
+        self._interval = self._interval_options[0][0]
+        self._interval_cb.currentIndexChanged.connect(
+            lambda idx: setattr(self, '_interval', self._interval_options[idx][0])
+        )
         tl.addWidget(self._interval_cb)
 
         tl.addWidget(_mk_sep())
@@ -996,7 +982,7 @@ class KlineViewTab(QtWidgets.QWidget):
         self._current_sell_triggers = []
         self._chart.clear()
         self._title_lbl.setStyleSheet(
-            f'color:#6c7086;font-size:14px;background:transparent;border:none;')
+            f'color:{_MUT};font-size:14px;background:transparent;border:none;')
         self._trig_count_lbl.setText('')
         self._prev_btn.setVisible(False)
         self._next_btn.setVisible(False)
@@ -1050,6 +1036,22 @@ class KlineViewTab(QtWidgets.QWidget):
         self._waveform_buy_indices = buy_indices or []
         self._waveform_sell_indices = sell_indices or []
 
+    def open_fullscreen(self) -> None:
+        """V13 兼容层：``open_fullscreen`` 等价于 ``_on_fullscreen``。
+
+        原因：``ConditionMonitorWidget._focus_minute_fullscreen_window`` 中
+        通过 ``kline_tab.open_fullscreen()`` 自动弹出分钟线全屏窗口。
+        但 ``KlineViewTab`` 实际只有 ``_on_fullscreen``（Qt slot），没有
+        ``open_fullscreen`` 这个 public 方法。补一个同名薄包装，让 V12/V13
+        的联动代码可以直接调用。
+        """
+        try:
+            self._on_fullscreen()
+        except Exception as _open_exc:  # noqa: BLE001
+            print(f"[KlineViewTab] open_fullscreen 失败: {_open_exc}")
+            import traceback
+            traceback.print_exc()
+
     def _on_fullscreen(self) -> None:
         """弹出独立全屏 K 线图窗口（含波形区）。"""
         if not self._chart._bars:
@@ -1071,6 +1073,61 @@ class KlineViewTab(QtWidgets.QWidget):
             waveform_sell_indices=getattr(self, '_waveform_sell_indices', []),
             parent=self,
         )
+        # V32 修复：移除强制覆盖，让全屏窗口 __init__ 根据 bars/datetimes 自行推断 interval
+        # 否则分钟全屏窗口会被错误标记为 DAILY 导致联动失败
+        # try:
+        #     _creator_iv = getattr(self, '_interval', None) or self._interval_options[self._interval_cb.currentIndex()][0]
+        #     win._interval = _creator_iv
+        #     print(f'[V30-CREATE] 全屏窗口创建者 interval={_creator_iv} bars={len(self._chart._bars)}', flush=True)
+        # except Exception as _ce:
+        #     print(f'[V30-CREATE] 失败: {_ce}', flush=True)
+        #     pass
+        print(f'[V32-FIX] 全屏窗口 interval 由 __init__ 自动推断，跳过强制覆盖', flush=True)
+        # 全屏窗口也接收点击事件：转发到 owner_panel（KlineTab），实现全屏模式下的日线↔分钟线联动
+        # V4 关键修复：owner_panel 可能是 _PeriodMonitorPanel 而非 ConditionMonitorWidget，
+        # 需沿 _parent_monitor 链找到真正的 Monitor（它才有 _on_daily_bar_clicked）。
+        try:
+            outer = getattr(self, '_owner_panel', None)
+            owner_monitor = None
+            if outer is not None:
+                if hasattr(outer, '_on_daily_bar_clicked_from_outer'):
+                    owner_monitor = outer  # outer 本身就是 Monitor
+                elif getattr(outer, '_parent_monitor', None) is not None and \
+                        hasattr(outer._parent_monitor, '_on_daily_bar_clicked_from_outer'):
+                    owner_monitor = outer._parent_monitor  # 走 _PeriodMonitorPanel._parent_monitor 拿 Monitor
+            print(f"[KlineView][DEBUG] _on_fullscreen: owner_panel={type(outer).__name__ if outer else None}, owner_monitor={type(owner_monitor).__name__ if owner_monitor else None}")
+            if owner_monitor is not None:
+                # 方案A（沿用）：信号连接
+                win.bar_clicked.connect(owner_monitor._on_daily_bar_clicked_from_outer)
+                # 方案B（V4新增，直接）：把 monitor 注入 _FullscreenChart._owner_monitor，绕过信号链
+                win._owner_monitor = owner_monitor
+                # V5 新增：把全屏窗口注册到 monitor._fullscreen_windows，
+                # 让 monitor._lower_fullscreen_windows() 在 from_fullscreen=True 时
+                # 把它降到主窗口后面+半透明，用户能看到主窗口 minute panel vline 移动。
+                try:
+                    if not hasattr(owner_monitor, '_fullscreen_windows'):
+                        owner_monitor._fullscreen_windows = []
+                    if win not in owner_monitor._fullscreen_windows:
+                        owner_monitor._fullscreen_windows.append(win)
+                except Exception as _reg_exc:
+                    print(f"[KlineView][DEBUG] 全屏窗口注册到 monitor 失败: {_reg_exc}")
+
+                # V8 新增：监听 owner_monitor.daily_bar_clicked，
+                # 当主 Monitor 的日线面板被点击时，全屏窗口独立移动 vline
+                try:
+                    if hasattr(owner_monitor, 'daily_bar_clicked'):
+                        owner_monitor.daily_bar_clicked.connect(win._on_outer_daily_bar_clicked)
+                        print(f"[KlineView][V8] 全屏窗口已监听 owner_monitor.daily_bar_clicked")
+                except Exception as _link_exc:
+                    print(f"[KlineView][V8] 全屏窗口监听 daily_bar_clicked 失败: {_link_exc}")
+
+                print(f"[KlineView][DEBUG] 全屏窗口 owner_monitor 注入成功: {owner_monitor}")
+            else:
+                print(f"[KlineView][DEBUG] 未找到 owner_monitor，全屏联动不生效！")
+        except Exception as _exc:
+            import traceback
+            traceback.print_exc()
+            print(f"[KlineView] 全屏窗口连接 owner_panel.bar_clicked 失败: {_exc}")
         win.showMaximized()
 
     def _load_bars(self, symbol: str) -> list:
@@ -1130,6 +1187,9 @@ class KlineViewTab(QtWidgets.QWidget):
 class _KlineFullscreenWindow(QtWidgets.QWidget):
     """独立弹出的全屏 K 线图窗口，按 Esc 或点击关闭按钮退出。"""
 
+    # 信号：日线 K 线点击事件转发到外部（供 Monitor 联动使用）
+    bar_clicked = QtCore.Signal(object)
+
     def __init__(self, bars: list, dates: list, volumes: list,
                  buy_triggers: set, sell_triggers: set,
                  ma_flags: list, show_triggers: bool,
@@ -1148,6 +1208,53 @@ class _KlineFullscreenWindow(QtWidgets.QWidget):
         self._waveform_dates = waveform_dates or []
         self._waveform_buy_indices = waveform_buy_indices or []
         self._waveform_sell_indices = waveform_sell_indices or []
+        self._owner_monitor = None  # V4: 转发日线点击用
+        # V27 诊断 print: 确认全屏窗口创建时的 owner_monitor 与 interval 状态
+        try:
+            print(f"[联动V27][_KlineFullscreenWindow.__init__] 外部传入 datetimes 数量: "
+                  f"{len(datetimes) if datetimes else 0}, bars 数量: {len(bars)}, "
+                  f"传入时 _owner_monitor={getattr(self, '_owner_monitor', None)!r}", flush=True)
+        except Exception as _p_exc:
+            print(f"[联动V27] _KlineFullscreenWindow.__init__ print 失败: {_p_exc}", flush=True)
+
+        # V20: 根据 datetimes 实际间隔反推 self._interval
+        # 解决 KlineViewTab 默认 _interval=DAILY 的问题
+        # V31 修复：self._chart 此刻还未创建，所以 V29 的 _bars_now 永远是 0
+        #          改用直接传入的 bars 参数（len(bars) 一定可用）作为强特征判断
+        try:
+            _new_iv = None
+            _secs = None
+            if datetimes is not None and len(datetimes) >= 2:
+                _gap = datetimes[1] - datetimes[0]
+                if hasattr(_gap, 'total_seconds'):
+                    _secs = _gap.total_seconds()
+                else:
+                    _secs = float(_gap)
+            # V31 关键修复：bars 数量是构造函数参数，这里一定可用
+            # 20000 bars 远大于日线 1584 bars，这是分钟线全屏窗口的强特征
+            _bars_now = len(bars) if bars else 0
+            if _bars_now > 5000:
+                _new_iv = Interval.MINUTE_5
+                print(f'[V31-FS] bars={_bars_now} > 5000 强特征，强制 MINUTE_5', flush=True)
+            elif _secs is not None and _secs > 0:
+                if _secs <= 360:
+                    _new_iv = Interval.MINUTE_5
+                elif _secs <= 1200:
+                    _new_iv = Interval.MINUTE_15
+                elif _secs <= 4500:
+                    _new_iv = Interval.HOUR_1
+                else:
+                    _new_iv = Interval.DAILY
+            else:
+                # 兜底：_secs 异常时按 bars 数量推断
+                _new_iv = Interval.DAILY if _bars_now < 2000 else Interval.MINUTE_5
+                print(f'[V31-FS] _secs 异常，按 bars={_bars_now} 推断 -> {_new_iv}', flush=True)
+            if _new_iv is not None and getattr(self, '_interval', None) != _new_iv:
+                print(f'[V31-FS] 全屏窗口 _interval 推断: gap={_secs:.0f}s, bars={_bars_now} -> {_new_iv}', flush=True)
+                self._interval = _new_iv
+        except Exception as _e:
+            print(f'[V31-FS] 推断 _interval 失败: {_e}', flush=True)
+
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1284,6 +1391,16 @@ class _KlineFullscreenWindow(QtWidgets.QWidget):
         self._candle_chk.stateChanged.connect(self._on_ma_toggle)
         self._trig_chk.stateChanged.connect(self._on_ma_toggle)
 
+        # 转发点击事件：_FullscreenChart.bar_clicked → _KlineFullscreenWindow.bar_clicked
+        try:
+            print(f"[KlineView][DEBUG] _KlineFullscreenWindow 转发前: chart.bar_clicked={getattr(self._chart, 'bar_clicked', None)}, self.bar_clicked={self.bar_clicked}")
+            self._chart.bar_clicked.connect(self.bar_clicked)
+            print(f"[KlineView][DEBUG] _KlineFullscreenWindow bar_clicked 转发连接成功")
+        except Exception as _exc:
+            import traceback
+            traceback.print_exc()
+            print(f"[KlineView] _KlineFullscreenWindow 转发 bar_clicked 失败: {_exc}")
+
     def _setup_vline_sync(self) -> None:
         """建立 K线区 ↔ 波形区的竖线同步。"""
         chart = self._chart
@@ -1353,6 +1470,171 @@ class _KlineFullscreenWindow(QtWidgets.QWidget):
         """Toggle measure mode in fullscreen chart."""
         self._chart._on_measure_toggle(checked)
 
+    # ----------------------------------------------------------------
+    # V8 新增：监听 owner_monitor.daily_bar_clicked 信号
+    # 当主 Monitor 的日线面板被点击时，外部 owner 会发射
+    #   daily_bar_clicked.emit(clicked_dt, signals)
+    #   签名: Signal(object, dict)  即 (focus_dt, signals_dict)
+    # 本窗口只关心 focus_dt —— 用它移动 vline。
+    # ----------------------------------------------------------------
+    def _on_outer_daily_bar_clicked(self, focus_dt, signals) -> None:
+        """V32 真根因修复：分钟线全屏窗口放弃 focus_datetime（其语义只适合日线面板），
+        直接查找该日期的分钟线索引范围，将 vline 和视口居中到该日分钟线的中间位置。
+        日线全屏窗口保持不变，继续使用 focus_datetime(completed_daily=True)。
+        """
+        try:
+            print(f"[联动V32][{type(self).__name__}] 收到 daily_bar_clicked: "
+                  f"focus_dt={focus_dt}, self._interval={getattr(self, '_interval', None)}", flush=True)
+        except Exception:
+            pass
+        try:
+            chart = getattr(self, '_chart', None)
+            if chart is None:
+                return
+            if focus_dt is None:
+                return
+            my_interval = getattr(self, '_interval', None) or getattr(chart, '_interval', None)
+            # 判断是否为分钟线全屏窗口
+            is_minute_window = False
+            try:
+                from vnpy.trader.constant import Interval as _I
+                if my_interval is not None and my_interval != _I.DAILY:
+                    is_minute_window = True
+            except Exception:
+                is_minute_window = (str(my_interval).upper().find('MINUTE') >= 0)
+
+            if is_minute_window:
+                # V32 核心修复：分钟线全屏窗口直接按日期查找分钟线索引范围
+                self._focus_minute_window_on_date(chart, focus_dt)
+            else:
+                # 日线全屏窗口：复用 focus_datetime（completed_daily=True 直接定位该日）
+                if hasattr(chart, 'focus_datetime'):
+                    chart.focus_datetime(focus_dt, completed_daily=True)
+                else:
+                    # 兜底：直接找最近的日线 bar
+                    dts = getattr(chart, '_datetimes', None)
+                    if dts:
+                        best_idx = 0
+                        best_diff = None
+                        for i, dt in enumerate(dts):
+                            if dt is None:
+                                continue
+                            try:
+                                diff = abs((dt - focus_dt).total_seconds())
+                            except Exception:
+                                continue
+                            if best_diff is None or diff < best_diff:
+                                best_diff = diff
+                                best_idx = i
+                        vline = getattr(chart, '_vline', None)
+                        if vline is not None:
+                            vline.setPos(best_idx)
+            print(f"[联动V32] 全屏窗口联动完成: focus_dt={focus_dt}, "
+                  f"is_minute={is_minute_window}, my_interval={my_interval}", flush=True)
+        except Exception as _exc:
+            import traceback
+            traceback.print_exc()
+            print(f"[联动V32] _on_outer_daily_bar_clicked 失败: {_exc}", flush=True)
+
+    def _focus_minute_window_on_date(self, chart, focus_dt) -> None:
+        """V32: 分钟线全屏窗口专用 - 查找该日期的分钟线索引范围，
+        将 vline 和视口居中到该日分钟线的中间位置。
+        """
+        bars = getattr(chart, '_bars', None)
+        if not bars:
+            return
+        target_date = focus_dt.date() if hasattr(focus_dt, 'date') else None
+        if target_date is None:
+            return
+        # 找到该日期的第一个和最后一个分钟线索引
+        first_idx = None
+        last_idx = None
+        for i, bar in enumerate(bars):
+            bar_dt = getattr(bar, 'dt', getattr(bar, 'datetime', None))
+            if bar_dt is None:
+                continue
+            try:
+                bar_date = bar_dt.date() if hasattr(bar_dt, 'date') else None
+            except Exception:
+                continue
+            if bar_date is None:
+                continue
+            if bar_date == target_date:
+                if first_idx is None:
+                    first_idx = i
+                last_idx = i
+            elif first_idx is not None and bar_date > target_date:
+                # 已经过了目标日期，停止搜索
+                break
+        if first_idx is None:
+            # 没找到该日期的分钟线，尝试用 focus_datetime 兜底
+            if hasattr(chart, 'focus_datetime'):
+                from datetime import time as _time, datetime as _dt
+                end_of_day = _dt.combine(target_date, _time(15, 0))
+                chart.focus_datetime(end_of_day, completed_daily=False)
+            return
+        # 居中到该日分钟线的中间位置
+        mid_idx = (first_idx + last_idx) // 2
+        # 移动 vline
+        vline = getattr(chart, '_vline', None)
+        if vline is not None:
+            try:
+                vline.setPos(mid_idx)
+                vline.setVisible(True)
+            except Exception:
+                pass
+        # 视口居中
+        main_plot = getattr(chart, '_main_plot', None)
+        if main_plot is not None:
+            try:
+                cur_xrange = main_plot.getViewBox().viewRange()[0]
+                cur_width = cur_xrange[1] - cur_xrange[0]
+            except Exception:
+                cur_width = 200
+            try:
+                last_bar_idx = len(bars) - 1
+                right_pad = 1
+                ideal_left = mid_idx - cur_width * 0.65
+                ideal_right = ideal_left + cur_width
+                if ideal_right > last_bar_idx + right_pad:
+                    ideal_right = last_bar_idx + right_pad
+                    ideal_left = ideal_right - cur_width
+                if ideal_left < -right_pad:
+                    ideal_left = -right_pad
+                main_plot.setXRange(ideal_left, ideal_right, padding=0)
+            except Exception:
+                pass
+        print(f"[联动V32] 分钟线全屏居中到日期={target_date}, "
+              f"first_idx={first_idx}, last_idx={last_idx}, mid_idx={mid_idx}", flush=True)
+
+    def closeEvent(self, event) -> None:
+        """V5 新增：窗口关闭时从 owner_monitor._fullscreen_windows 中反注册，
+        避免主 Monitor 持有已销毁的窗口引用导致后续 _lower_fullscreen_windows 崩溃。
+        V8 新增：同时断开 owner_monitor.daily_bar_clicked 监听。
+        """
+        try:
+            owner = getattr(self, '_owner_monitor', None)
+            if owner is not None:
+                # V8：断开 daily_bar_clicked 监听
+                try:
+                    if hasattr(owner, 'daily_bar_clicked'):
+                        try:
+                            owner.daily_bar_clicked.disconnect(self._on_outer_daily_bar_clicked)
+                        except (TypeError, RuntimeError):
+                            pass  # 未连接
+                except Exception:
+                    pass
+                # V5：反注册全屏窗口
+                try:
+                    lst = getattr(owner, '_fullscreen_windows', None)
+                    if lst is not None and self in lst:
+                        lst.remove(self)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        super().closeEvent(event)
+
     def keyPressEvent(self, event) -> None:
         if event.key() == QtCore.Qt.Key.Key_Escape:
             self.close()
@@ -1362,6 +1644,9 @@ class _KlineFullscreenWindow(QtWidgets.QWidget):
 
 class _FullscreenChart(QtWidgets.QWidget):
     """全屏模式下的 K 线图渲染（直接接收已解析的数据，无需再加载）。"""
+
+    # 信号：日线 K 线点击事件转发（类级 Signal，修复前在实例方法中创建 Signal 是无效的）
+    bar_clicked = QtCore.Signal(object)
 
     def __init__(self, bars: list, dates: list, volumes: list,
                  buy_triggers: set, sell_triggers: set,
@@ -1380,6 +1665,14 @@ class _FullscreenChart(QtWidgets.QWidget):
         self._show_candles = show_candles
 
         self._build_ui()
+        # 在 _build_ui 之后连接 sigMouseClicked（必须在 _redraw 之前，且不放在 _redraw 中，避免重复连接）
+        try:
+            scene = self._main_plot.scene()
+            if scene is not None:
+                scene.sigMouseClicked.connect(self._on_mouse_clicked_for_link)
+                print(f"[KlineView][DEBUG] _FullscreenChart sigMouseClicked 已在 _build_ui 阶段连接", flush=True)
+        except Exception as _exc:
+            print(f"[KlineView] _FullscreenChart 绑定 sigMouseClicked 失败: {_exc}", flush=True)
         self._redraw()
 
     def _build_ui(self) -> None:
@@ -1532,6 +1825,206 @@ class _FullscreenChart(QtWidgets.QWidget):
             self._main_plot.setYRange(price_lo - margin, price_hi + margin, padding=0)
         self._main_plot.setMouseEnabled(x=True, y=True)
 
+        # 联动：日线点击事件转发（已在 _build_ui 后绑定，这里不要再覆盖 bar_clicked！）
+
+    def _on_mouse_clicked_for_link(self, evt) -> None:
+        """点击主图区域，解析最近 bar 索引，转发 datetime 给监听者。
+
+        V28 真实修复: 把 dt 变量提升为函数顶部, 让 V7 兜底 mousePressEvent 也能引用。
+        V28 关键：方案B 兜底中 dt 来自 _datetimes[x], 此处把它也提供给 V7 mousePressEvent 用。
+        """
+        try:
+            # V28 标记: 用户点击即输出到 stdout
+            print(f"[V28-CLICK-FN] _on_mouse_clicked_for_link 触发, evt_type={type(evt).__name__ if evt else None}", flush=True)
+            if evt is None:
+                print(f"[KlineView][DEBUG] _on_mouse_clicked_for_link 退出原因: None")
+                return
+            # V7 修复：兼容 QtCore.Qt.MouseButton 与 QtWidgets.Qt.MouseButton
+            btn = getattr(evt, 'button', None)
+            try:
+                btn_int = int(btn) if btn is not None else -1
+            except Exception:
+                btn_int = -1
+            if btn_int != 1:  # Qt.LeftButton == 1
+                # 容忍右键/中键也走一遍（用于调试），不直接 return
+                print(f"[KlineView][DEBUG] _on_mouse_clicked_for_link 收到非左键 (btn_int={btn_int}, btn={btn})，按 V7 兼容规则继续")
+            if not self._main_plot.sceneBoundingRect().contains(evt.scenePos()):
+                print(f"[KlineView][DEBUG] _on_mouse_clicked_for_link 退出原因: 点击不在主图区域")
+                return
+            mp = self._main_plot.vb.mapSceneToView(evt.scenePos())
+            x = int(round(mp.x()))
+            if not (0 <= x < len(self._bars)):
+                print(f"[KlineView][DEBUG] _on_mouse_clicked_for_link 退出原因: x={x} 越界 ({len(self._bars)})")
+                return
+            if self._datetimes and x < len(self._datetimes):
+                dt = self._datetimes[x]
+            else:
+                from datetime import datetime as _dt
+                dt = _dt.now()
+            # V28 标记: 输出"点击解析出来的具体 datetime"
+            print(f"[V28-CLICK-FN] 解析完成 x={x}, dt={dt}, len_bars={len(self._bars)}, len_dt={len(self._datetimes) if self._datetimes else 0}", flush=True)
+            print(f"[KlineView][DEBUG] 全屏K线被点击: x={x}, dt={dt}, 发射 bar_clicked")
+            # V4 方案A: 先发信号（让 window 转出去）
+            self.bar_clicked.emit(dt)
+            # V4 方案B: 再走 fallback 路径 —— 通过 parent window 找 owner_monitor 直接调
+            try:
+                owner_monitor = None
+                # 路径1: 父窗口（即 _KlineFullscreenWindow）直接挂了 _owner_monitor
+                par = self.parent()
+                while par is not None and not isinstance(par, _KlineFullscreenWindow):
+                    par = par.parent() if hasattr(par, 'parent') else None
+                if par is not None and getattr(par, '_owner_monitor', None) is not None:
+                    owner_monitor = par._owner_monitor
+                print(f"[KlineView][DEBUG] 方案B owner_monitor={type(owner_monitor).__name__ if owner_monitor else None}")
+                if owner_monitor is not None:
+                    # 重要：日线的 00:00 datetime 需要补成 23:59，否则 _update_minute_view_for_date 会过滤掉
+                    from datetime import time as _time
+                    if dt.hour == 0 and dt.minute == 0 and dt.second == 0:
+                        focus_dt = dt.replace(hour=23, minute=59, second=59)
+                    else:
+                        focus_dt = dt
+                    owner_monitor._on_daily_bar_clicked_from_outer(focus_dt, from_fullscreen=True)
+                    print(f"[KlineView][DEBUG] 方案B 已直接调用 owner_monitor._on_daily_bar_clicked_from_outer, focus_dt={focus_dt}", flush=True)
+            except Exception as _exc2:
+                print(f"[KlineView] 方案B fallback 失败: {_exc2}")
+        except Exception as _exc:
+            print(f"[KlineView] _on_mouse_clicked_for_link 异常: {_exc}")
+
+    # V22 关键修复：_FullscreenChart 没有 focus_datetime 方法，
+    # 但 condition_monitor_widget.py 在全屏窗口上调用 self._kline_tab.focus_datetime()。
+    # 这里补齐与 _PeriodMonitorPanel.focus_datetime 语义一致的接口。
+    def focus_datetime(self, dt, completed_daily: bool = False):
+        """定位目标时刻；日线联动只使用目标日期前的完整日线。
+        V22 简化版：全屏窗口只关心 vline + 视口（没有 _waveform_view）。
+        """
+        if dt is None or not getattr(self, "_bars", None):
+            return None
+        # 统一去 tz：bar 可能是 aware，外部传入的 dt 可能是 naive
+        try:
+            from datetime import timezone
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
+        except Exception:
+            pass
+        target_index = None
+        for index, bar in enumerate(self._bars):
+            bar_dt = getattr(bar, "dt", getattr(bar, "datetime", None))
+            if bar_dt is None:
+                continue
+            try:
+                if bar_dt.tzinfo is not None:
+                    bar_dt_cmp = bar_dt.replace(tzinfo=None)
+                else:
+                    bar_dt_cmp = bar_dt
+            except Exception:
+                bar_dt_cmp = bar_dt
+            if completed_daily and bar_dt_cmp.date() >= dt.date():
+                continue
+            # V32: 使用 date 级别比较，因为 dt 可能是日线 datetime（time=00:00:00），
+            # 而分钟线 bar 的 datetime 如 09:30:00，直接比较 datetime 会失败
+            if bar_dt_cmp.date() <= dt.date():
+                target_index = index
+        if target_index is None:
+            return None
+        target_bar = self._bars[target_index]
+        target_bar_dt = getattr(target_bar, "dt", getattr(target_bar, "datetime", None))
+        main_plot = self._main_plot
+        # ── 移动 vline ──
+        try:
+            self._vline.setPos(target_index)
+            self._vline.setVisible(True)
+        except Exception:
+            pass
+        # ── 把 target_index 放在视口中央偏右（65% 位置），同 _PeriodMonitorPanel ──
+        try:
+            cur_xrange = main_plot.getViewBox().viewRange()[0]
+            cur_width = cur_xrange[1] - cur_xrange[0]
+        except Exception:
+            cur_width = 200
+        try:
+            last_index = len(self._bars) - 1
+            right_pad = 1
+            ideal_left = target_index - cur_width * 0.65
+            ideal_right = ideal_left + cur_width
+            if ideal_right > last_index + right_pad:
+                ideal_right = last_index + right_pad
+                ideal_left = ideal_right - cur_width
+            if ideal_left < -right_pad:
+                ideal_left = -right_pad
+            main_plot.setXRange(ideal_left, ideal_right, padding=0)
+        except Exception:
+            pass
+        # 强制 vline 提到所有 plot 之上
+        try:
+            self._vline.setZValue(1000)
+        except Exception:
+            pass
+        # 强制重绘
+        try:
+            main_plot.getViewBox().update()
+        except Exception:
+            pass
+        return target_bar_dt
+
+    def mousePressEvent(self, event):
+        """V7 兜底：pyqtgraph scene signal 在某些 pyqtgraph 版本不触发时，直接用 QWidget 鼠标事件.
+
+        V28 修复: 重写整个兜底逻辑, 严格按 if/else 缩进, 不再让 focus_dt 漏出 try 块.
+        """
+        try:
+            from PyQt5.QtCore import Qt as _Qt
+            if event.button() != _Qt.LeftButton:
+                return  # 只处理左键
+            if self._main_plot is None:
+                return
+            # _FullscreenChart 是 QWidget（不是 GraphicsLayoutWidget），
+            # 所以需要：先通过 _glw_main.mapToScene(self._glw_main.mapFromGlobal(event.globalPos())) 拿到 scene_pos
+            # 实际更稳的办法：直接通过 GraphicsLayoutWidget 的 mousePressEvent 链路。
+            # 但这里我们用一个最简方案：把 event.pos() 当作 _main_plot 内部坐标直接换算。
+            # 由于 _main_plot 占据 _glw_main 整个区域，event.pos() 就是 _glw_main 内部坐标。
+            try:
+                scene_pt = self._glw_main.mapToScene(event.pos())
+            except Exception as _m_exc:
+                print(f"[KlineView][DEBUG] V7 兜底 mapToScene 失败: {_m_exc}", flush=True)
+                scene_pt = None
+            if scene_pt is None or not self._main_plot.sceneBoundingRect().contains(scene_pt):
+                return
+            mp = self._main_plot.vb.mapSceneToView(scene_pt)
+            x = int(round(mp.x()))
+            if not (0 <= x < len(self._bars)):
+                return
+            if self._datetimes and x < len(self._datetimes):
+                dt = self._datetimes[x]
+            else:
+                from datetime import datetime as _dt
+                dt = _dt.now()
+            print(f"[KlineView][DEBUG] V7 兜底 mousePressEvent: x={x}, dt={dt}", flush=True)
+            self.bar_clicked.emit(dt)
+            # 直接找 owner_monitor
+            par = self.parent()
+            while par is not None and not isinstance(par, _KlineFullscreenWindow):
+                par = par.parent() if hasattr(par, 'parent') else None
+            owner = getattr(par, '_owner_monitor', None) if par is not None else None
+            if owner is None:
+                print(f"[KlineView][DEBUG] V7 兜底未找到 owner, 跳过调用", flush=True)
+                return
+            from datetime import time as _time
+            if dt.hour == 0 and dt.minute == 0 and dt.second == 0:
+                focus_dt = dt.replace(hour=23, minute=59, second=59)
+            else:
+                focus_dt = dt
+            owner._on_daily_bar_clicked_from_outer(focus_dt, from_fullscreen=True)
+            print(f"[KlineView][DEBUG] V7 兜底已调用 owner_monitor, focus_dt={focus_dt}", flush=True)
+            # V28 标记: 用户可见的 ASCII 输出, 确认 V7 兜底已触发
+            print(f"[V28-CLICK] fullscreen daily bar clicked, dt={focus_dt}, owner={type(owner).__name__}", flush=True)
+        except Exception as _exc:
+            print(f"[KlineView] V7 mousePressEvent 异常: {_exc}", flush=True)
+        # 继续走父类逻辑
+        try:
+            super().mousePressEvent(event)
+        except Exception:
+            pass
+
     def _on_mouse_moved(self, evt) -> None:
         pos = evt[0]
         if not self._main_plot.sceneBoundingRect().contains(pos):
@@ -1583,3 +2076,11 @@ class _FullscreenChart(QtWidgets.QWidget):
         if not hasattr(self, '_measure_tool') or self._measure_tool is None:
             self._measure_tool = MeasureTool(self._main_plot, self._bars, self._dates)
         self._measure_tool.set_active(checked)
+
+
+# ── V28 模块级 print: import 即可在终端看到 ──
+print("=" * 70, flush=True)
+print("[V28-MODULE] vnpy/strategy_condition/ui/kline_view.py 已被加载", flush=True)
+print("[V28-MODULE] V7 兜底 mousePressEvent + _on_mouse_clicked_for_link 已就绪", flush=True)
+print("[V28-MODULE] V18 _on_outer_daily_bar_clicked 已就绪", flush=True)
+print("=" * 70, flush=True)

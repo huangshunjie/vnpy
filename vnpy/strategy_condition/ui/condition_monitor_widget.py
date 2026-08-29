@@ -9,6 +9,29 @@ strategy_condition/ui/condition_monitor_widget.py
 """
 from __future__ import annotations
 
+import os as _os
+import time as _time
+
+# ── V10 启动 banner ──────────────────────────────────────────────
+# 目的：解决 "改了 .py 但 vnpy 还用旧 .pyc 加载" 导致的"代码已经改过但不生效"
+# 现象：用户反复报同一个问题，实际上运行的还是 V8 之前的代码。
+#       本 banner 会 print 该文件绝对路径 + mtime + 唯一版本标识，
+#       用户只要把启动后看到的第一行 banner 发给开发者，即可确认
+#       到底跑的是不是当前 .pyc/.py。
+_BANNER_VERSION = "Monitor日线↔分钟联动 V25 (2026-08-25_15-00) — 路径A 防御性 + 路径B/C 必执行 + 大量诊断 print"
+try:
+    _here = _os.path.abspath(__file__)
+    _mtime = _time.strftime(
+        "%Y-%m-%d %H:%M:%S", _time.localtime(_os.path.getmtime(_here))
+    )
+    print(
+        f"[Monitor-Banner] version={_BANNER_VERSION} "
+        f"file={_here} mtime={_mtime}"
+    )
+except Exception:
+    pass
+# ─────────────────────────────────────────────────────────────────
+
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -689,6 +712,7 @@ class _PeriodMonitorPanel(QtWidgets.QWidget):
     def focus_datetime(self, dt, completed_daily: bool = False):
         """定位目标时刻；日线联动只使用目标日期前的完整日线。"""
         if dt is None or not self._current_bars:
+            print(f"[focus_datetime] 早退: dt={dt} bars={len(self._current_bars) if self._current_bars else 0}")
             return None
         # 统一去 tz：bar 可能是 aware (tzinfo=+08:00)，外部传入的 dt 可能是 naive，
         # 直接比较会报 can't compare offset-naive and offset-aware datetimes。
@@ -715,39 +739,79 @@ class _PeriodMonitorPanel(QtWidgets.QWidget):
             if bar_dt_cmp <= dt:
                 target_index = index
         if target_index is None:
+            print(f"[focus_datetime] 未找到 target_index, dt={dt}, bars={len(self._current_bars)}")
             return None
+        target_bar = self._current_bars[target_index]
+        target_bar_dt = getattr(target_bar, "dt", getattr(target_bar, "datetime", None))
         chart = self._kline_tab._chart
-        chart._vline.setPos(target_index)
-        chart._vline.setVisible(True)
-        # ── v4 关键修复：滚动 X 轴让目标 bar 进入视口 ───────────────
-        # setPos 只改 vline 数据位置，不动 ViewBox 的可视范围。
-        # 若 target_index 远在视口外，vline 会被裁掉看不见。
         main_plot = chart._main_plot
+        # 诊断：进入 setPos 前的 vline position
+        try:
+            old_pos = chart._vline.getPos()[0] if chart._vline.getPos() is not None else None
+        except Exception:
+            old_pos = None
         try:
             cur_xrange = main_plot.getViewBox().viewRange()[0]
             cur_width = cur_xrange[1] - cur_xrange[0]
-            # 目标 bar 放到视口右 2/3 处
-            new_left = max(0, target_index - int(cur_width * 0.35))
-            new_right = new_left + cur_width
+        except Exception:
+            cur_xrange = (0, 200)
+            cur_width = 200
+        print(f"[focus_datetime] target_index={target_index}/{len(self._current_bars)-1}, "
+              f"target_bar_dt={target_bar_dt}, old_vline_pos={old_pos}, "
+              f"cur_xrange=({cur_xrange[0]:.1f}, {cur_xrange[1]:.1f}), cur_width={cur_width:.1f}")
+        # ── 移动 vline ──
+        chart._vline.setPos(target_index)
+        chart._vline.setVisible(True)
+        # ── v10 关键修复：把 target_index 放在视口中央偏右（65% 位置）──
+        # 之前算法：new_left = target - 0.35*W（target 落在 35% 左侧）
+        #   bug 1：当 target 接近右边界时，new_right = new_left + W 超过 viewbox 上限，
+        #         pyqtgraph 会夹紧，但 X 轴被压缩/裁切到右边界，看不到 target 周围
+        #   bug 2：target 落在视口左侧，离视野中心远，看起来"vline 没动"
+        # 现在算法：target 落在 65%，且 new_right 严格夹紧到 (last_index + margin)，
+        #          必要时整体左移以保证视口宽度
+        try:
+            last_index = len(self._current_bars) - 1
+            # 取视口右边的"缓冲" = 一根 K 线（target 距离 last_index 不到 1 根时仍然能看见）
+            right_pad = 1
+            # 计算理想左边界
+            ideal_left = target_index - cur_width * 0.65
+            ideal_right = ideal_left + cur_width
+            # 夹紧右侧
+            if ideal_right > last_index + right_pad:
+                ideal_right = last_index + right_pad
+                ideal_left = ideal_right - cur_width
+            # 夹紧左侧
+            if ideal_left < -right_pad:
+                ideal_left = -right_pad
+            new_left = ideal_left
+            new_right = ideal_right
+            print(f"[focus_datetime] setXRange: new_left={new_left:.1f}, new_right={new_right:.1f}, "
+                  f"target_in_viewport_pos={((target_index - new_left) / cur_width * 100):.1f}%")
             main_plot.setXRange(new_left, new_right, padding=0)
-            # waveform 子图已 setXLink，主图一动就同步
         except Exception as e:
-            print(f"[focus_datetime v4] setXRange 失败: {e}")
-        # ─────────────────────────────────────────────────────────
+            print(f"[focus_datetime] setXRange 失败: {e}")
+            import traceback
+            traceback.print_exc()
         self._waveform_view.set_vline_pos(target_index)
         # 强制 vline 提到所有 plot 之上
         try:
             chart._vline.setZValue(1000)
         except Exception:
             pass
-        target_bar = self._current_bars[target_index]
         # 强制重绘
         try:
             main_plot.getViewBox().update()
             chart._main_plot.replot() if hasattr(chart._main_plot, 'replot') else None
         except Exception:
             pass
-        return getattr(target_bar, "dt", getattr(target_bar, "datetime", None))
+        # 诊断：退出时 vline 实际位置
+        try:
+            new_pos = chart._vline.getPos()[0] if chart._vline.getPos() is not None else None
+        except Exception:
+            new_pos = None
+        print(f"[focus_datetime] 退出: target_index={target_index}, new_vline_pos={new_pos}, "
+              f"match={new_pos == target_index}")
+        return target_bar_dt
 
 
 class ConditionMonitorWidget(QtWidgets.QWidget):
@@ -867,23 +931,549 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
             traceback.print_exc()
 
     def _on_daily_bar_clicked(self, clicked_dt):
-        """处理日线K线点击事件"""
+        """处理日线K线点击事件（内部入口：来自自身日线面板的点击）"""
+        self._handle_daily_bar_clicked(clicked_dt, from_fullscreen=False)
+
+    def _on_daily_bar_clicked_from_outer(self, clicked_dt, from_fullscreen=False):
+        """处理日线K线点击事件（外部入口：来自全屏窗口转发）
+
+        V5 新增：kline_view.py 的 _KlineFullscreenWindow 弹窗后，
+        会通过 ``win.bar_clicked.connect(self._on_daily_bar_clicked_from_outer)``
+        把用户在全屏窗口里的点击转回主 Monitor，由本方法统一处理。
+        同时本方法也作为方案B 的 fallback：
+        ``_FullscreenChart._on_mouse_clicked_for_link`` 在信号未连接时
+        会直接 ``owner_monitor._on_daily_bar_clicked_from_outer(focus_dt, True)``。
+        """
+        self._handle_daily_bar_clicked(clicked_dt, from_fullscreen=from_fullscreen)
+
+    def _handle_daily_bar_clicked(self, clicked_dt, from_fullscreen=False):
+        """统一的日线点击处理逻辑（V12 重构）
+
+        行为：
+        1) 计算 clicked_date；
+        2) 查询该日期的买卖信号；
+        3) 更新主 Monitor 内"分钟面板"的 vline + 波形区；
+        4) emit daily_bar_clicked，供 UI 内其它订阅者使用；
+        5) 如果来自全屏窗口（from_fullscreen=True）：
+           a) 如果"分钟线全屏窗口"已经存在，把它 raise+activate 置顶，
+              并调用它的 focus_datetime(clicked_dt) 跳到对应日的中心；
+           b) 如果不存在，自动打开一个分钟线全屏窗口（showMaximized），
+              并在数据加载完成后自动 focus_datetime。
+        """
         try:
             clicked_date = clicked_dt.date()
-            print(f"[联动] 日线K线被点击: {clicked_date}")
+            print(f"[联动] 日线K线被点击: {clicked_date} (from_fullscreen={from_fullscreen})")
+            print(f"[联动D] _fullscreen_windows 列表: {[(type(w).__name__, getattr(w, '_interval', None), len(getattr(getattr(w, '_chart', None), '_bars', [])) if getattr(w, '_chart', None) else 0) for w in (getattr(self, '_fullscreen_windows', []) or [])]}")
+            # V20 诊断：定位 self 身份
+            print(f"[联动V20]   self 类型={type(self).__name__} id={id(self)}, 主 Monitor?={self.__class__.__name__=='ConditionMonitorWidget'}")
+            if hasattr(self, '_fullscreen_windows'):
+                print(f"[联动V20]   self._fullscreen_windows={len(self._fullscreen_windows)} 个: {[(type(w).__name__, getattr(w, '_interval', None)) for w in (self._fullscreen_windows or [])]}")
+            else:
+                print(f"[联动V20]   self 没有 _fullscreen_windows 属性")
 
             # 查找该日期的买卖信号
             signals = self._get_signals_for_date(clicked_date)
             print(f"[联动] 找到信号: 买入={len(signals['buy'])}, 卖出={len(signals['sell'])}")
 
-            # 更新分钟面板
+            # 更新主 Monitor 内部的分钟面板
             self._update_minute_view_for_date(clicked_date, signals)
 
             # 发射信号（供全屏窗口监听）
             self.daily_bar_clicked.emit(clicked_dt, signals)
 
+            # V17 关键修复：主动把点击事件 dispatch 到**所有**已开全屏窗口
+            # （含其它全屏窗口，例如"分钟K线全屏窗口"）。
+            # 原因：kline_view._on_fullscreen 里的
+            #   ``owner_monitor.daily_bar_clicked.connect(win._on_outer_daily_bar_clicked)``
+            # 只在"创建日线全屏窗口时"被调用过一次，它连接的 ``win`` 变量
+            # 就是"日线全屏窗口自己"——也就是"自己监听自己"，无效果。
+            # 之后打开的"分钟线全屏窗口"在它的 _on_fullscreen 里**也**会执行
+            # 那行 connect，但此时**日线全屏窗口已经存在**，它的 vline 移动
+            # 走的是"主 Monitor 自己的 _minute_panel"路径；而分钟全屏窗口
+            # 自己的 vline 移动只有当自己 connect 成功才会发生。
+            # 但用户场景是"先开日线全屏再开分钟全屏"——分钟全屏 _on_fullscreen
+            # 时**会** connect 到 owner_monitor.daily_bar_clicked（V8 代码确认）。
+            # 那为什么分钟全屏还是不动？→ 因为 _on_outer_daily_bar_clicked
+            # 内部用 ``self._interval`` 判定周期（"分钟/日线"），但
+            # _KlineFullscreenWindow 在某些路径下没正确设置 _interval
+            # （_PeriodMonitorPanel._kline_tab 上 _interval 是 'd'/'5m'，
+            #  而 _KlineFullscreenWindow._interval 来自 KlineViewTab._kline
+            #  路径，line 1764 附近 `if hasattr(self, '_kline_view'): iv = self._kline_view._interval`）。
+            # 无论 _interval 是什么，我们直接调每个全屏窗口的
+            # ``_on_outer_daily_bar_clicked`` —— 它内部自己决定要不要跳。
+            # 这样保证"日线全屏点日线 → 所有已开全屏窗口都收到事件 → 各自移动 vline"。
+            self._dispatch_to_fullscreen_windows(clicked_dt, signals)
+
+            # V16：不管 from_fullscreen 与否，都让"主 Monitor 内嵌的分钟K线面板"
+            # 直接同步跳到 clicked_dt（这是用户最直观的体验 —— 日线点哪儿，
+            # 主 Monitor 下方那个嵌入的分钟K线面板 vline + 视图就跳到哪儿）。
+            # 注意：ConditionMonitorWidget 本身没有 _kline_tab，
+            # 真正嵌入的分钟K线面板是 self._minute_panel（_PeriodMonitorPanel）。
+            try:
+                if hasattr(self, '_minute_panel') and self._minute_panel is not None:
+                    # _PeriodMonitorPanel 自身就有 focus_datetime() 方法
+                    # 内部会调 self._kline_tab._chart 的 vline + setXRange
+                    if hasattr(self._minute_panel, 'focus_datetime'):
+                        self._minute_panel.focus_datetime(
+                            clicked_dt, completed_daily=False)
+                        print(
+                            f"[联动V16] 主 Monitor 内嵌分钟K线 "
+                            f"跳到 {clicked_dt.date()} 中心完成")
+                    else:
+                        # fallback: 走 _kline_tab._chart
+                        inner_chart = getattr(
+                            self._minute_panel._kline_tab, '_chart', None)
+                        if inner_chart is not None and hasattr(
+                                inner_chart, 'focus_datetime'):
+                            inner_chart.focus_datetime(
+                                clicked_dt, completed_daily=False)
+                            print(
+                                f"[联动V16] 主 Monitor 内嵌分钟K线 "
+                                f"(chart 直调) 跳到 {clicked_dt.date()}")
+            except Exception as _inner_exc:  # noqa: BLE001
+                print(f"[联动V16] 内嵌分钟K线 focus_datetime 失败: {_inner_exc}")
+
+            # V12：来自全屏的点击 → 主动跳到"分钟线全屏窗口"对应日期的中心
+            if from_fullscreen:
+                print(f"[联动V25][调用者] 即将调用 _focus_minute_fullscreen_window(clicked_dt={clicked_dt})")
+                _focus_result = self._focus_minute_fullscreen_window(clicked_dt)
+                print(f"[联动V25][调用者] _focus_minute_fullscreen_window 已返回={_focus_result}")
+
         except Exception as e:
             print(f"[联动] 处理日线点击失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _focus_minute_fullscreen_window(self, clicked_dt):
+        """V25 防御性 + 三段独立保险 + 大量诊断 print。
+
+        V24 失败根因（终端日志已证）：
+        AttributeError: type object 'Interval' has no attribute 'MONTHLY'
+        → 路径A 第1行就崩，整个 try 块被 except 吞掉
+        → 路径B/C 永远不被执行
+        → 结果：A/B/C 三条都没机会
+
+        V25 修复：
+        1. 路径A 用 hasattr 防御 MONTHLY 不存在的问题
+        2. 路径A/B/C 每个都独立 try，单个失败不影响其他
+        3. 路径B 永远执行（即使 A 命中，B 也作为验证日志）
+        4. 路径C 永远执行（兜底）
+        5. 每个关键点都打 print（候选窗口、路径A/B/C 命中/失败、focus_datetime 前后）
+        """
+        # ── 入口 print ──
+        print(f"[联动V25][_focus_minute_fullscreen_window] 入口 clicked_dt={clicked_dt}")
+        # 补充打印每个候选窗口的详细信息
+        try:
+            fullscreen_windows = list(getattr(self, '_fullscreen_windows', []) or [])
+            for i, w in enumerate(fullscreen_windows):
+                w_chart = getattr(w, '_chart', None)
+                bars = getattr(w_chart, '_bars', []) if w_chart else []
+                if len(bars) >= 2:
+                    try:
+                        b0_dt = getattr(bars[0], 'datetime', None)
+                        b1_dt = getattr(bars[1], 'datetime', None)
+                        if b0_dt and b1_dt:
+                            gap = (b1_dt - b0_dt).total_seconds()
+                        else:
+                            gap = 'N/A'
+                    except Exception:
+                        gap = 'N/A'
+                else:
+                    gap = 'N/A'
+                print(f"[联动D] 候选[{i}] {type(w).__name__} _interval={getattr(w, '_interval', None)} bars_len={len(bars)} gap={gap}")
+        except Exception as e:
+            print(f"[联动D] 打印候选窗口详情异常: {e}")
+
+        # ── 1) 收集全屏窗口列表（防御性） ──
+        try:
+            fullscreen_windows = list(getattr(self, '_fullscreen_windows', []) or [])
+        except Exception as e:
+            print(f"[联动V25] 收集 _fullscreen_windows 失败: {e}")
+            fullscreen_windows = []
+
+        if not fullscreen_windows:
+            print(f"[联动V25] 没有任何已注册全屏窗口（_fullscreen_windows 为空）")
+            print(f"[联动V25] 提示：请检查 _KlineFullscreenWindow 创建后是否调用了 self._register_fullscreen_window()")
+            return
+
+        # ── 2) 打印所有候选窗口信息（深度诊断） ──
+        print(f"[联动V25] ============================================================")
+        print(f"[联动V25] 候选全屏窗口 {len(fullscreen_windows)} 个：")
+        for i, w in enumerate(fullscreen_windows):
+            w_type = type(w).__name__
+            w_id = id(w)
+            w_iv = getattr(w, '_interval', '<NO _interval>')
+            w_chart = getattr(w, '_chart', None)
+            w_chart_type = type(w_chart).__name__ if w_chart else '<NO _chart>'
+            w_bars = getattr(w_chart, '_bars', None) if w_chart else None
+            w_bars_n = len(w_bars) if w_bars else 0
+            w_gap = '<N/A>'
+            if w_bars and len(w_bars) >= 2:
+                try:
+                    b0_dt = getattr(w_bars[0], 'datetime', None)
+                    b1_dt = getattr(w_bars[1], 'datetime', None)
+                    if b0_dt and b1_dt:
+                        w_gap = f"{(b1_dt - b0_dt).total_seconds():.0f}s"
+                except Exception:
+                    pass
+            print(f"[联动V25]   [{i}] type={w_type} id=0x{w_id:X} _interval={w_iv} "
+                  f"chart_type={w_chart_type} bars={w_bars_n} bars_gap={w_gap}")
+        print(f"[联动V25] ============================================================")
+
+        # ── 3) 防御性准备：Interval 黑名单 ──
+        try:
+            from vnpy.trader.constant import Interval
+            # V25 防御：MONTHLY 可能不存在
+            _DAILY = getattr(Interval, 'DAILY', None)
+            _WEEKLY = getattr(Interval, 'WEEKLY', None)
+            _MONTHLY = getattr(Interval, 'MONTHLY', None)
+            blacklist = tuple(iv for iv in (_DAILY, _WEEKLY, _MONTHLY) if iv is not None)
+            print(f"[联动V25] Interval 黑名单 = {[str(x) for x in blacklist]}")
+        except Exception as e:
+            print(f"[联动V25] 导入 Interval 失败: {e}，使用字符串黑名单")
+            Interval = None
+            blacklist = ('d', 'w', 'm', 'D', 'W', 'M', 'DAILY', 'WEEKLY', 'MONTHLY')
+
+        # ── 4) 路径A：负向判断（独立 try，不影响 B/C） ──
+        minute_fs_A = None
+        try:
+            for i, w in enumerate(fullscreen_windows):
+                iv = getattr(w, '_interval', None)
+                if iv is None:
+                    print(f"[联动V25] 路径A: 候选[{i}] {type(w).__name__}._interval=None → 跳过")
+                    continue
+                if iv in blacklist:
+                    print(f"[联动V25] 路径A: 候选[{i}] {type(w).__name__}._interval={iv} 命中黑名单 → 视为日线，跳过")
+                    continue
+                minute_fs_A = w
+                print(f"[联动V25] 路径A命中: 候选[{i}] {type(w).__name__}._interval={iv} → 视为分钟线 ✓")
+                break
+            if minute_fs_A is None:
+                print(f"[联动V25] 路径A: 所有候选的 _interval 都在黑名单（都是 DAILY/WEEKLY/MONTHLY）→ 路径A 未命中")
+        except Exception as e_A:
+            print(f"[联动V25] 路径A 异常: {e_A}")
+            import traceback
+            traceback.print_exc()
+
+        # ── 5) 路径B：bars 间隔反推（独立 try，强制执行） ──
+        minute_fs_B = None
+        try:
+            for i, w in enumerate(fullscreen_windows):
+                w_chart = getattr(w, '_chart', None)
+                bars = getattr(w_chart, '_bars', None) if w_chart else None
+                if not bars or len(bars) < 2:
+                    print(f"[联动V25] 路径B: 候选[{i}] {type(w).__name__} bars=<{len(bars) if bars else 0}> → 跳过")
+                    continue
+                b0_dt = getattr(bars[0], 'datetime', None)
+                b1_dt = getattr(bars[1], 'datetime', None)
+                if b0_dt is None or b1_dt is None:
+                    print(f"[联动V25] 路径B: 候选[{i}] {type(w).__name__} bars[0/1].datetime=None → 跳过")
+                    continue
+                try:
+                    gap = (b1_dt - b0_dt).total_seconds()
+                except Exception:
+                    print(f"[联动V25] 路径B: 候选[{i}] {type(w).__name__} bars datetime 不可减 → 跳过")
+                    continue
+                # 间隔 < 半天 → 一定是分钟线
+                if gap < 86400 * 0.5:
+                    minute_fs_B = w
+                    print(f"[联动V25] 路径B命中: 候选[{i}] {type(w).__name__} bars={len(bars)} "
+                          f"gap={gap:.0f}s → 强制判定为分钟线 ✓")
+                    break
+                else:
+                    print(f"[联动V25] 路径B: 候选[{i}] {type(w).__name__} bars={len(bars)} "
+                          f"gap={gap:.0f}s ≥ 半天 → 视为日线")
+            if minute_fs_B is None and not minute_fs_A:
+                print(f"[联动V25] 路径B: 所有候选的 bars 间隔 ≥ 半天 → 路径B 未命中")
+        except Exception as e_B:
+            print(f"[联动V25] 路径B 异常: {e_B}")
+            import traceback
+            traceback.print_exc()
+
+        # ── 6) 路径C：bars 数量兜底（独立 try，强制执行） ──
+        minute_fs_C = None
+        try:
+            # 日线 1584 根 vs 分钟线 20000 根，分钟线 bar 数远大于日线
+            max_bars = -1
+            for i, w in enumerate(fullscreen_windows):
+                w_chart = getattr(w, '_chart', None)
+                bars = getattr(w_chart, '_bars', None) if w_chart else None
+                if not bars:
+                    print(f"[联动V25] 路径C: 候选[{i}] {type(w).__name__} bars=None → 跳过")
+                    continue
+                n = len(bars)
+                print(f"[联动V25] 路径C: 候选[{i}] {type(w).__name__} bars={n}")
+                if n > max_bars:
+                    max_bars = n
+                    minute_fs_C = w
+            if minute_fs_C is not None and max_bars > 1000:
+                print(f"[联动V25] 路径C兜底命中: {type(minute_fs_C).__name__} bars={max_bars}（最多，>1000）"
+                      f"→ 视为分钟线 ✓")
+            elif minute_fs_C is not None:
+                print(f"[联动V25] 路径C: 最多 bars={max_bars}，但 < 1000，不当兜底用")
+                minute_fs_C = None
+        except Exception as e_C:
+            print(f"[联动V25] 路径C 异常: {e_C}")
+            import traceback
+            traceback.print_exc()
+
+        # ── 7) 选择最终目标：A > B > C ──
+        minute_fs = minute_fs_A or minute_fs_B or minute_fs_C
+        if minute_fs is None:
+            print(f"[联动V25] ★★★ 失败 ★★★ A/B/C 三条路径都没找到分钟线全屏窗口，放弃跳转")
+            return
+
+        chosen_via = 'A' if minute_fs_A is minute_fs else ('B' if minute_fs_B is minute_fs else 'C')
+        print(f"[联动V25] ✓ 最终选中: {type(minute_fs).__name__} (走路径{chosen_via})")
+
+        # ── 8) 置顶分钟线全屏窗口 ──
+        try:
+            if minute_fs.isMinimized():
+                minute_fs.showNormal()
+            minute_fs.showMaximized()
+            minute_fs.raise_()
+            minute_fs.activateWindow()
+            print(f"[联动V25] 置顶 {type(minute_fs).__name__} 完成")
+        except Exception as _raise_exc:
+            print(f"[联动V25] 置顶失败: {_raise_exc}")
+
+        # ── 9) 直接操作分钟全屏窗口的图表来实现居中 ──
+        try:
+            chart = getattr(minute_fs, '_chart', None)
+            if chart is None:
+                print(f"[联动V25] ✗ {type(minute_fs).__name__} 没有 _chart，无法居中")
+                return
+
+            bars = getattr(chart, '_bars', [])
+            print(f"[DIAG] bars type: {type(bars)}, len: {len(bars)}")
+            if bars:
+                print(f"[DIAG] first bar type: {type(bars[0])}, dir: {dir(bars[0])}")
+                print(f"[DIAG] first bar datetime: {getattr(bars[0], 'datetime', None)}, dt: {getattr(bars[0], 'dt', None)}")
+                print(f"[DIAG] last bar datetime: {getattr(bars[-1], 'datetime', None)}, dt: {getattr(bars[-1], 'dt', None)}")
+            if not bars:
+                print(f"[联动V25] ✗ {type(minute_fs).__name__}._chart._bars 为空，无法居中")
+                return
+
+            # 查找目标日期在分钟线中的 bar 索引范围（优先使用 _datetimes 或 datetimes 或 _dates）
+            datetimes = getattr(minute_fs, '_datetimes', None) or getattr(minute_fs, 'datetimes', None)
+            if datetimes is None:
+                chart = getattr(minute_fs, '_chart', None)
+                if chart is not None:
+                    datetimes = getattr(chart, '_datetimes', None) or getattr(chart, 'datetimes', None) or getattr(chart, '_dates', None)
+            target_date = clicked_dt.date()
+            if datetimes is not None and len(datetimes) == len(bars):
+                print(f"[联动V25] 成功获取 datetimes，长度 {len(datetimes)}")
+                # 使用 _datetimes 列表
+                day_indices = [i for i, dt in enumerate(datetimes) if dt.date() == target_date]
+                if not day_indices:
+                    # 回退：取日期小于等于 target_date 的最大索引
+                    target_index = None
+                    for i in range(len(datetimes)-1, -1, -1):
+                        if datetimes[i].date() <= target_date:
+                            target_index = i
+                            break
+                    if target_index is None:
+                        print(f"[联动V25] ✗ 未找到日期 <= {target_date} 的分钟 bar，无法居中")
+                        return
+                else:
+                    # 取该日分钟线的中间位置
+                    mid = len(day_indices) // 2
+                    target_index = day_indices[mid]
+                print(f"[联动V25] 使用 _datetimes 找到目标索引: {target_index}")
+            else:
+                # 回退到 bar 对象属性（兼容旧数据）
+                print(f"[联动V25] minute_fs._datetimes 不存在或长度不匹配，回退到 bar 对象属性")
+                day_indices = []
+                for i, bar in enumerate(bars):
+                    bar_dt = getattr(bar, 'datetime', getattr(bar, 'dt', None))
+                    if bar_dt is None:
+                        continue
+                    # 统一时区比较
+                    if hasattr(bar_dt, 'tzinfo') and bar_dt.tzinfo is not None:
+                        bar_dt_cmp = bar_dt.replace(tzinfo=None)
+                    else:
+                        bar_dt_cmp = bar_dt
+                    if bar_dt_cmp.date() == target_date:
+                        day_indices.append(i)
+
+                if not day_indices:
+                    # 若该日无分钟线，则取日期小于等于 target_date 的最后一根
+                    target_index = None
+                    for i in range(len(bars)-1, -1, -1):
+                        bar = bars[i]
+                        bar_dt = getattr(bar, 'datetime', None)
+                        if bar_dt is None:
+                            continue
+                        # 比较日期
+                        bar_date = bar_dt.date()
+                        if hasattr(bar_dt, 'tzinfo') and bar_dt.tzinfo is not None:
+                            bar_date_naive = bar_dt.replace(tzinfo=None).date()
+                        else:
+                            bar_date_naive = bar_date
+                        if bar_date_naive <= target_date:
+                            target_index = i
+                            break
+                    if target_index is None:
+                        print(f"[联动V25] ✗ 未找到日期 <= {target_date} 的分钟 bar，无法居中")
+                        return
+                else:
+                    # 取该日分钟线的中间位置
+                    mid = len(day_indices) // 2
+                    target_index = day_indices[mid]
+
+            print(f"[联动V25] 目标索引: {target_index} (日分钟线共 {len(day_indices)} 根)")
+
+            # 移动 vline
+            if hasattr(chart, '_vline'):
+                chart._vline.setPos(target_index)
+                chart._vline.setVisible(True)
+
+            # 设置视口居中
+            main_plot = getattr(chart, '_main_plot', None)
+            if main_plot is not None:
+                viewbox = main_plot.getViewBox()
+                cur_range = viewbox.viewRange()[0]
+                cur_width = cur_range[1] - cur_range[0]
+                # 设定左边界 = target_index - cur_width/2，使得 target 居中
+                new_left = target_index - cur_width / 2.0
+                new_right = target_index + cur_width / 2.0
+                # 夹紧到有效范围
+                last_index = len(bars) - 1
+                if new_left < 0:
+                    new_left = 0
+                    new_right = cur_width
+                if new_right > last_index:
+                    new_right = last_index
+                    new_left = last_index - cur_width
+                main_plot.setXRange(new_left, new_right, padding=0)
+                print(f"[联动V25] ✓✓✓ 分钟线全屏窗口居中到 {target_date} (索引 {target_index}) 完成 ✓✓✓")
+            else:
+                print(f"[联动V25] ✗ 无法获取 _main_plot，无法居中")
+        except Exception as _focus_exc:
+            print(f"[联动V25] 居中异常: {_focus_exc}")
+            import traceback
+            traceback.print_exc()
+
+    def _dim_fullscreen_windows(self, opacity: float = 0.25, ms: int = 400):
+        """V11 新增：只降低"全屏窗口列表"不透明度，不 lower()。
+
+        原因：V5 的 ``_lower_fullscreen_windows`` 会调 ``w.lower()`` 把
+        全屏窗口放到主窗口下面。但用户日常操作中，全屏窗口已经被设置
+        为 maximized（覆盖整个屏幕）甚至在另一块显示器上。此时 ``lower()``
+        在 ``Z-order`` 上的影响完全看不到，主 Monitor 仍被全屏窗口完全遮挡。
+        V11 改为：只调 ``setWindowOpacity(opacity)`` + 一定毫秒后还原。
+        0.25 不透明 = 接近“透明玻璃”效果，用户能透过全屏窗口的
+        日线/成交量/波形区看到主 Monitor 下面分钟面板的 vline 跳动。
+        """
+        try:
+            wins = list(getattr(self, '_fullscreen_windows', []))
+            if not wins:
+                print("[联动] V11: 无已注册全屏窗口，跳过降低不透明度")
+                return
+
+            print(f"[联动] V11: 降低 {len(wins)} 个全屏窗口不透明度 → {opacity} ({ms}ms)")
+
+            for w in wins:
+                try:
+                    if w is None or not w.isVisible():
+                        continue
+                    w.setWindowOpacity(opacity)
+                except Exception:
+                    continue
+
+            from PyQt5.QtCore import QTimer
+            def _restore():
+                for w in list(getattr(self, '_fullscreen_windows', [])):
+                    try:
+                        if w is None or not w.isVisible():
+                            continue
+                        w.setWindowOpacity(1.0)
+                    except Exception:
+                        continue
+                print(f"[联动] V11: 全屏窗口不透明度已恢复 1.0")
+            QTimer.singleShot(ms, _restore)
+        except Exception as e:
+            print(f"[联动] _dim_fullscreen_windows 失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _lower_fullscreen_windows(self):
+        """V5 新增：把当前已知的全屏窗口降到主窗口后面 + 半透明，1.2s 后恢复
+
+        实现方式：
+        - 主 Monitor 维护一个 ``_fullscreen_windows`` 弱引用列表（V5 新增），
+          由 ``_KlineFullscreenWindow`` 在 __init__ 时注册、closeEvent 时移除；
+        - 本方法遍历该列表，对每个窗口：
+          * setWindowOpacity(0.35)；
+          * lower() —— 把它放到主窗口下面；
+        - 启动一个 QTimer 单次计时（1200ms），回调里把所有窗口 setWindowOpacity(1.0) raise_()。
+        """
+        try:
+            wins = list(getattr(self, '_fullscreen_windows', []))
+            for w in wins:
+                try:
+                    if w is None:
+                        continue
+                    if not w.isVisible():
+                        continue
+                    w.setWindowOpacity(0.35)
+                    w.lower()
+                except Exception:
+                    continue
+            if not wins:
+                return
+
+            from PyQt5.QtCore import QTimer
+            def _restore():
+                for w in list(getattr(self, '_fullscreen_windows', [])):
+                    try:
+                        if w is None or not w.isVisible():
+                            continue
+                        w.setWindowOpacity(1.0)
+                        w.raise_()
+                    except Exception:
+                        continue
+            QTimer.singleShot(1200, _restore)
+        except Exception as e:
+            print(f"[联动] _lower_fullscreen_windows 失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _dispatch_to_fullscreen_windows(self, clicked_dt, signals):
+        """V17 关键修复：主动把点击事件 dispatch 到**所有**已开全屏窗口。
+
+        背景：kline_view._on_fullscreen 里会
+          ``owner_monitor.daily_bar_clicked.connect(win._on_outer_daily_bar_clicked)``
+        但如果用户是"先开日线全屏、后开分钟全屏"，那在开日线全屏时 daily_bar_clicked
+        还没连任何人，那次 connect 实际上只走了"self 监听 self"。
+        后开分钟全屏会重新 connect 一次（V8 代码路径），但这是"分钟全屏主动 connect"，
+        不会反向影响"日线全屏"——于是当用户在日线全屏点日线，daily_bar_clicked
+        emit 出来**仍然没人**处理。
+
+        解决办法：ConditionMonitorWidget 在 emit 之后主动遍历所有已注册
+        全屏窗口，**统一**调它们的 ``_on_outer_daily_bar_clicked(clicked_dt, signals)``。
+        这样不论是"日线全屏→分钟全屏"还是"分钟全屏→日线全屏"，
+        都会被同步触发。
+        """
+        try:
+            wins = list(getattr(self, '_fullscreen_windows', []) or [])
+            print(f"[联动V17] dispatch: 已注册全屏窗口 {len(wins)} 个, clicked_dt={clicked_dt.date()}")
+            for w in wins:
+                if w is None:
+                    continue
+                handler = getattr(w, '_on_outer_daily_bar_clicked', None)
+                if handler is None:
+                    print(f"[联动V17]   - 窗口 {type(w).__name__} 无 _on_outer_daily_bar_clicked 接口")
+                    continue
+                try:
+                    handler(clicked_dt, signals)
+                    print(f"[联动V17]   - 已 dispatch 到 {type(w).__name__}(_interval={getattr(w, '_interval', None)})")
+                except Exception as _per_exc:
+                    print(f"[联动V17]   - dispatch {type(w).__name__} 异常: {_per_exc}")
+                    import traceback
+                    traceback.print_exc()
+        except Exception as _exc:
+            print(f"[联动V17] _dispatch_to_fullscreen_windows 异常: {_exc}")
             import traceback
             traceback.print_exc()
 
@@ -902,6 +1492,9 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
         minute_panel = self._minute_panel
 
         # ── 方案A：从真实 snapshot.signal_type 读取（优先）──────────────
+        # V10 重要：ConditionSnapshot.signal_type 定义是 "BUY" / "SELL" （大写），
+        # 但之前 v5~v9 都写成 "buy" / "sell" （小写），导致用户看到
+        # "找到信号: 买入=0, 卖出=0" 这个 BUG。这里统一用 ``.upper()``。
         minute_snapshots = getattr(minute_panel, '_current_snapshots', [])
         if minute_snapshots:
             for snap in minute_snapshots:
@@ -910,10 +1503,13 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
                     continue
                 if snap_dt.date() != target_date:
                     continue
-                signal_type = getattr(snap, 'signal_type', None)
-                if signal_type == 'buy':
+                signal_type_raw = getattr(snap, 'signal_type', None)
+                if signal_type_raw is None:
+                    continue
+                signal_type = str(signal_type_raw).upper().strip()
+                if signal_type == 'BUY':
                     result['buy'].append(snap_dt)
-                elif signal_type == 'sell':
+                elif signal_type == 'SELL':
                     result['sell'].append(snap_dt)
             # 若找到真实信号，直接返回
             if result['buy'] or result['sell']:
@@ -967,15 +1563,24 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
 
         这里改为直接对 ``_minute_panel`` 调用 ``focus_datetime``，
         panel 内部会用 ``_kline_tab._chart._vline.setPos`` + 同步波形区 +
-        同步信息栏。传入当天 12:00 + completed_daily=True，让 vline 落
-        在 target_date 当天最后已完成的 minute bar 上。
+        同步信息栏。
+
+        关键修复（2026-08-23，三次修复）：之前传入当天 12:00 + completed_daily=True，
+        会导致 ``focus_datetime`` 跳过同日 bar，vline 落在 **前一天** 的最后 1 根，
+        用户感知"点击 2026-04-20 没有联动"。改为：
+          - dt = target_date 当天 23:59（足够覆盖日内所有 minute bar）
+          - completed_daily=False（**不要**跳过同日 bar）
+        这样 ``focus_datetime`` 取 ``bar_dt_cmp <= dt`` 的最后一根 = target_date
+        当天最后 1 根 minute bar，vline 会精确落在用户点击的日线上。
+
+        无论该日是否有 buy/sell signal 都执行联动（signals 只是用作信息栏缓存）。
         """
         try:
             if not hasattr(self, '_minute_panel'):
                 return
             minute_panel = self._minute_panel
 
-            # 缓存信号上下文
+            # 缓存信号上下文（给 info 栏/状态栏使用；不再影响 vline 跳转）
             self._pending_signals = dict(signals or {})
 
             if not hasattr(minute_panel, 'focus_datetime'):
@@ -983,14 +1588,14 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
                 return
 
             from datetime import datetime, time, timezone, timedelta
-            # 当天 12:00 作为目标时刻；completed_daily=True 时
-            # focus_datetime 会跳过同日 bar，取 <= 目标时刻的最后一根
-            # minute bar（恰是 target_date 当天最后已完成的 bar）
+            # 用 target_date 当天 23:59 作为目标时刻；completed_daily=False
+            # 让 focus_datetime 取 <= 目标时刻的最后 1 根 minute bar
+            # （即 target_date 当天的最后 1 根 bar，vline 落在点击的日线上）。
             # 加上 +08:00 与 K线 bar 的 tz 对齐（focus_datetime 内部会
             # 先 replace(tzinfo=None) 再比较，保持语义一致）。
             tz = timezone(timedelta(hours=8))
-            dt = datetime.combine(target_date, time(12, 0), tzinfo=tz)
-            minute_panel.focus_datetime(dt, completed_daily=True)
+            dt = datetime.combine(target_date, time(23, 59, 59), tzinfo=tz)
+            minute_panel.focus_datetime(dt, completed_daily=False)
         except Exception as e:
             print(f"[联动] 更新分钟视图失败: {e}")
             import traceback
@@ -1102,7 +1707,9 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
         by_date: dict = {}
         for i, bar in enumerate(minute_bars):
             try:
-                dt = bar.datetime
+                dt = getattr(bar, 'datetime', getattr(bar, 'dt', None))
+                if dt is None:
+                    continue
                 d_key = dt.strftime("%Y-%m-%d")
             except Exception:
                 continue
@@ -1111,8 +1718,12 @@ class ConditionMonitorWidget(QtWidgets.QWidget):
         snapshots = []
         for i, bar in enumerate(minute_bars):
             try:
-                dt = bar.datetime
-                d_key = dt.strftime("%Y-%m-%d")
+                dt = getattr(bar, 'datetime', getattr(bar, 'dt', None))
+                if dt is None:
+                    dt = None
+                    d_key = ""
+                else:
+                    d_key = dt.strftime("%Y-%m-%d")
             except Exception:
                 dt = None
                 d_key = ""
