@@ -1602,6 +1602,21 @@ class _KlineFullscreenWindow(QtWidgets.QWidget):
                 if ideal_left < -right_pad:
                     ideal_left = -right_pad
                 main_plot.setXRange(ideal_left, ideal_right, padding=0)
+                # 先尝试通过 chart._update_y_range 自动调整
+                chart._update_y_range()
+                # 显式计算该日期内价格区间，确保 Y 轴准确
+                date_bars = bars[first_idx:last_idx+1]
+                if date_bars:
+                    price_lo = min(b[2] for b in date_bars)
+                    price_hi = max(b[1] for b in date_bars)
+                    price_range = price_hi - price_lo
+                    if price_range <= 0:
+                        price_range = price_hi * 0.05 or 0.1
+                    margin = price_range * 0.08
+                    main_plot.setYRange(price_lo - margin, price_hi + margin, padding=0)
+                # 强制刷新视图
+                main_plot.getViewBox().update()
+                chart.update()
             except Exception:
                 pass
         print(f"[联动V32] 分钟线全屏居中到日期={target_date}, "
@@ -1663,6 +1678,7 @@ class _FullscreenChart(QtWidgets.QWidget):
         self._ma_flags = ma_flags
         self._show_triggers = show_triggers
         self._show_candles = show_candles
+        self._updating_range = False
 
         self._build_ui()
         # 在 _build_ui 之后连接 sigMouseClicked（必须在 _redraw 之前，且不放在 _redraw 中，避免重复连接）
@@ -1729,6 +1745,9 @@ class _FullscreenChart(QtWidgets.QWidget):
             rateLimit=60, slot=self._on_mouse_moved)
 
         # Connect mouse click for measure tool
+        # Connect range changed to update y-axis automatically
+        viewbox = self._main_plot.getViewBox()
+        viewbox.sigRangeChanged.connect(self._on_range_changed)
 
 
 
@@ -1826,6 +1845,46 @@ class _FullscreenChart(QtWidgets.QWidget):
         self._main_plot.setMouseEnabled(x=True, y=True)
 
         # 联动：日线点击事件转发（已在 _build_ui 后绑定，这里不要再覆盖 bar_clicked！）
+
+    def _update_y_range(self) -> None:
+        """根据当前可见范围重新计算 Y 轴范围，确保 K 线可见。"""
+        import math
+        viewbox = self._main_plot.getViewBox()
+        x_range = viewbox.viewRange()[0]
+        x_start = int(math.floor(x_range[0]))
+        x_end = int(math.ceil(x_range[1]))
+        n = len(self._bars)
+        x_start = max(0, min(x_start, n - 1))
+        x_end = max(0, min(x_end, n))
+        if x_start >= x_end:
+            return
+        vis_bars = self._bars[x_start:x_end]
+        if not vis_bars:
+            return
+        price_lo = min(b[2] for b in vis_bars)
+        price_hi = max(b[1] for b in vis_bars)
+        # Ensure a minimum price range to avoid vanishing candles
+        price_range = price_hi - price_lo
+        if price_range < 0.01:
+            # Use 1% of price_hi as fallback, or 0.5 if price_hi is 0
+            fallback = max(price_hi * 0.01, 0.5) if price_hi > 0 else 0.5
+            price_lo = price_hi - fallback / 2
+            price_hi = price_hi + fallback / 2
+            price_range = price_hi - price_lo
+        margin = price_range * 0.1  # increase margin to 10%
+        self._main_plot.setYRange(price_lo - margin, price_hi + margin, padding=0)
+        # Force a repaint
+        self._main_plot.getViewBox().update()
+
+    def _on_range_changed(self):
+        """当视图范围变化时自动更新Y轴范围。"""
+        if getattr(self, '_updating_range', False):
+            return
+        self._updating_range = True
+        try:
+            self._update_y_range()
+        finally:
+            self._updating_range = False
 
     def _on_mouse_clicked_for_link(self, evt) -> None:
         """点击主图区域，解析最近 bar 索引，转发 datetime 给监听者。
@@ -1952,6 +2011,7 @@ class _FullscreenChart(QtWidgets.QWidget):
             if ideal_left < -right_pad:
                 ideal_left = -right_pad
             main_plot.setXRange(ideal_left, ideal_right, padding=0)
+            self._update_y_range()
         except Exception:
             pass
         # 强制 vline 提到所有 plot 之上
